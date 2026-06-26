@@ -1,0 +1,42 @@
+# Node / Expo (app has its own .gitignore too)
+node_modules/
+.expo/
+dist/
+web-build/
+
+# Native build output
+app/ios/
+app/android/
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+# Provisioning (your filled-in copy + generated Vault SQL)
+setup.env
+supabase/vault-secrets.sql
+
+# Python (worker)
+__pycache__/
+*.pyc
+.venv/
+.venv*/
+worker/.venv-check/
+*.egg-info/
+.pytest_cache/
+worker/data/
+
+# Supabase CLI local state
+supabase/.temp/
+supabase/.branches/
+
+# Secrets / credentials (belt-and-braces beyond the patterns above)
+*.pem
+*.p8
+*.p12
+*-service-account*.json
+gha-creds-*.json
+
+# OS / editor
+.DS_Store
+*.log

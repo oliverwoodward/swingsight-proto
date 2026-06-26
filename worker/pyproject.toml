@@ -1,0 +1,36 @@
+[project]
+name = "swingsight-worker"
+version = "0.1.0"
+description = "SwingSight cloud CV worker: pose -> events -> metrics -> fault gates -> AI coaching."
+requires-python = ">=3.12"
+dependencies = [
+    # HTTP service (Cloud Run)
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "pydantic>=2.9",
+    "pydantic-settings>=2.5",
+    "python-dotenv>=1.0",
+    "httpx>=0.27",
+    # Storage / backend / LLM (used from Phase 2/3/5)
+    "boto3>=1.35",            # R2 (S3-compatible) get/put
+    "supabase>=2.9",          # write results back to Postgres
+    "anthropic>=0.40",        # Claude Haiku 4.5 coaching call
+    # Computer vision (wired up in Phase 3)
+    "numpy>=1.26",
+    "scipy>=1.11",
+    # NB: mediapipe hard-depends on opencv-contrib-python (which provides cv2), so we
+    # do NOT also pin opencv-python-headless — two cv2 providers would shadow each
+    # other. The container installs the X libs opencv-contrib needs (see Dockerfile).
+    "mediapipe>=0.10.30",
+    "av>=12.0",               # PyAV decode/encode (ffmpeg bindings)
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "ruff>=0.6"]
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]

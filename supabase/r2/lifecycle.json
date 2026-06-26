@@ -1,0 +1,29 @@
+{
+  "_comment": "SwingSight R2 object lifecycle (spec §21 retention). Apply with the AWS S3 CLI against the R2 S3 endpoint (see supabase/r2/README.md). Object-age based: processing completes in <30s, so raw age ~= time-since-processed. Keypoints & metrics live in Postgres (retained ~12 months), not R2.",
+  "Rules": [
+    {
+      "ID": "expire-raw-uploads",
+      "Filter": { "Prefix": "raw/" },
+      "Status": "Enabled",
+      "Expiration": { "Days": 2 }
+    },
+    {
+      "ID": "expire-extracted-frames",
+      "Filter": { "Prefix": "frames/" },
+      "Status": "Enabled",
+      "Expiration": { "Days": 7 }
+    },
+    {
+      "ID": "expire-playback-clips",
+      "Filter": { "Prefix": "playback/" },
+      "Status": "Enabled",
+      "Expiration": { "Days": 30 }
+    },
+    {
+      "ID": "abort-incomplete-multipart",
+      "Filter": { "Prefix": "" },
+      "Status": "Enabled",
+      "AbortIncompleteMultipartUpload": { "DaysAfterInitiation": 1 }
+    }
+  ]
+}

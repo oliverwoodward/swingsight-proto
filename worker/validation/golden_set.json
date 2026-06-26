@@ -1,0 +1,20 @@
+{
+  "version": "2026.06.0",
+  "faultLibraryVersion": "2026.06.0",
+  "notes": "SwingSight golden validation set (spec §13.1). Each swing carries a KNOWN fault labelled by a qualified coach. NO FABRICATED LABELS: a swing awaiting human judgment is labelSource 'pending_coach_review' with no verdict, and the loader rejects any label that lacks a labeller. The agreement rate is reported over whatever REAL labels exist. To add a label, set labelSource to 'coach' (or 'self_provisional' for a clearly-marked non-coach baseline), fill labeledBy + labeledAt, and set EXACTLY ONE of expectedPrimaryFaultId / expectedNoFault. See worker/validation/README.md.",
+  "swings": [
+    {
+      "id": "sample_img5736_faceon_rh",
+      "clip": "IMG_5736.mov",
+      "view": "face_on",
+      "handedness": "RH",
+      "labelSource": "pending_coach_review",
+      "labeledBy": null,
+      "labeledAt": null,
+      "expectedPrimaryFaultId": null,
+      "expectedNoFault": false,
+      "metricGroundTruth": {},
+      "notes": "The real Phase-3 sample swing (untrimmed 4K, filmed far back / low confidence). Awaiting a qualified coach to set the primary fault (or expectedNoFault). The runner prints the pipeline's current prediction for this clip as REVIEW context only — that prediction is the thing being validated, never the label."
+    }
+  ]
+}
