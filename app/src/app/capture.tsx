@@ -1,8 +1,8 @@
 import { File } from 'expo-file-system';
-import { router, useFocusEffect } from 'expo-router';
+import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { ActivityIndicator, Linking, Pressable, StyleSheet, View } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useSafeAreaInsets, type EdgeInsets } from 'react-native-safe-area-context';
 import {
   Camera,
   useCameraDevice,
@@ -21,19 +21,35 @@ import { Brand } from '@/constants/brand';
 import { CAPTURE } from '@/constants/capture';
 import { useProfile } from '@/contexts/profile';
 import type { SwingView } from '@/domain';
+import { pickSwingVideo } from '@/services/media-library';
 
 type Flow = 'ready' | 'countdown' | 'recording' | 'review';
 
-/** The clip we hold after recording, ready for upload (wired in Phase 4). */
+/**
+ * The clip we hold before upload — produced either by a live recording or by importing an
+ * existing video from the photo library. `source` (and the imported-only `ext`/`contentType`/
+ * dimensions) lets the review meta and upload pick the right content type.
+ */
 interface Captured {
   uri: string;
   durationSec: number;
   sizeBytes: number | null;
+  source: 'recorded' | 'imported';
+  /** Imported clips only — undefined for recordings, so the runner's mov/quicktime defaults apply. */
+  ext?: string;
+  contentType?: string;
+  width?: number | null;
+  height?: number | null;
 }
 
 export default function CaptureScreen() {
   const insets = useSafeAreaInsets();
   const { profile, updateProfile } = useProfile();
+
+  // When launched from Home's "Upload a swing", open the library picker straight away and
+  // skip the camera permission prompt the recording flow would otherwise trigger.
+  const { pick } = useLocalSearchParams<{ pick?: string }>();
+  const autoPick = pick === '1';
 
   const cameraPerm = useCameraPermission();
   const micPerm = useMicrophonePermission();
@@ -63,10 +79,13 @@ export default function CaptureScreen() {
   const outputs = useMemo(() => [videoOutput], [videoOutput]);
   const constraints = useMemo(() => [{ fps: CAPTURE.targetFps }], []);
 
-  const isActive = focused && cameraPerm.hasPermission && flow !== 'review';
+  // Review renders via an early return below, so the camera is only ever mounted for capture.
+  const isActive = focused && cameraPerm.hasPermission;
 
-  // Request permissions on first mount (camera required, mic optional for audio).
+  // Request permissions on first mount (camera required, mic optional for audio). Skipped when
+  // the user came to import — they shouldn't be asked for the camera just to pick a video.
   useEffect(() => {
+    if (autoPick) return;
     if (!cameraPerm.hasPermission && cameraPerm.canRequestPermission) {
       cameraPerm.requestPermission();
     }
@@ -120,7 +139,7 @@ export default function CaptureScreen() {
       }
       recorderRef.current = null;
       recordStartRef.current = null;
-      setCaptured({ uri, durationSec, sizeBytes });
+      setCaptured({ uri, durationSec, sizeBytes, source: 'recorded' });
       setFlow('review');
     },
     [clearTimer],
@@ -195,6 +214,76 @@ export default function CaptureScreen() {
     [view, updateProfile],
   );
 
+  // Pick an existing swing video from the photo library and drop it into the review flow.
+  const handleImport = useCallback(async () => {
+    setError(null);
+    const res = await pickSwingVideo();
+    if (res.status === 'denied') {
+      setError(
+        res.canAskAgain
+          ? 'Photo access is needed to pick a swing video.'
+          : 'Enable photo access in Settings to import a swing.',
+      );
+      return;
+    }
+    if (res.status === 'canceled') return;
+    const v = res.video;
+    setCaptured({
+      uri: v.uri,
+      durationSec: v.durationSec,
+      sizeBytes: v.sizeBytes,
+      source: 'imported',
+      ext: v.ext,
+      contentType: v.contentType,
+      width: v.width,
+      height: v.height,
+    });
+    setFlow('review');
+  }, []);
+
+  // Auto-open the picker once when arriving from Home's "Upload a swing".
+  const autoPickedRef = useRef(false);
+  useEffect(() => {
+    if (autoPick && !autoPickedRef.current) {
+      autoPickedRef.current = true;
+      handleImport();
+    }
+  }, [autoPick, handleImport]);
+
+  // Hand the captured/imported clip to the processing screen. Imported clips carry their own
+  // ext/contentType; recordings leave them undefined so the runner's mov/quicktime defaults apply.
+  const onAnalyze = useCallback(() => {
+    if (!captured) return;
+    router.replace({
+      pathname: '/processing',
+      params: {
+        uri: captured.uri,
+        view,
+        handedness,
+        ext: captured.ext,
+        contentType: captured.contentType,
+      },
+    });
+  }, [captured, view, handedness]);
+
+  // For an imported clip "retake" means pick a different video; for a recording it re-arms the camera.
+  const onRetake = captured?.source === 'imported' ? handleImport : retake;
+
+  // ---- Review (works without the camera, so it sits above the permission gates) ----------
+
+  if (flow === 'review' && captured) {
+    return (
+      <ReviewLayout
+        captured={captured}
+        view={view}
+        handedness={handedness}
+        insets={insets}
+        onRetake={onRetake}
+        onAnalyze={onAnalyze}
+      />
+    );
+  }
+
   // ---- Permission / device gates -----------------------------------------
 
   if (!cameraPerm.hasPermission) {
@@ -202,6 +291,8 @@ export default function CaptureScreen() {
       <PermissionGate
         canRequest={cameraPerm.canRequestPermission}
         onRequest={() => cameraPerm.requestPermission()}
+        onImport={handleImport}
+        error={error}
       />
     );
   }
@@ -219,7 +310,7 @@ export default function CaptureScreen() {
 
   const recording = flow === 'recording';
   const counting = flow === 'countdown';
-  const reviewing = flow === 'review';
+  const idle = !recording && !counting;
   const progress = Math.min(elapsedMs / (CAPTURE.maxDurationSeconds * 1000), 1);
 
   return (
@@ -233,15 +324,13 @@ export default function CaptureScreen() {
         resizeMode="cover"
       />
 
-      {!reviewing ? <FramingOverlay view={view} handedness={handedness} /> : null}
-
-      {reviewing && captured ? <CapturePreview uri={captured.uri} /> : null}
+      <FramingOverlay view={view} handedness={handedness} />
 
       {/* Top bar: close + view switcher (hidden mid-capture), or recording timer. */}
       <View style={[styles.topBar, { paddingTop: insets.top + 8 }]}>
         {recording ? (
           <RecordingTimer elapsedMs={elapsedMs} progress={progress} />
-        ) : !reviewing && !counting ? (
+        ) : !counting ? (
           <View style={styles.topRow}>
             <IconButton label="✕" onPress={() => router.back()} />
             <ViewSwitcher view={view} onChange={switchView} />
@@ -256,38 +345,29 @@ export default function CaptureScreen() {
         </View>
       ) : null}
 
-      {/* Bottom controls. */}
+      {/* Bottom controls: record button, with a library-import shortcut while idle. */}
       <View style={[styles.bottomBar, { paddingBottom: insets.bottom + 18 }]}>
-        {reviewing && captured ? (
-          <ReviewControls
-            captured={captured}
-            view={view}
-            handedness={handedness}
-            onRetake={retake}
-            onAnalyze={() =>
-              router.replace({
-                pathname: '/processing',
-                params: { uri: captured.uri, view, handedness },
-              })
-            }
+        {error ? <ThemedText style={styles.error}>{error}</ThemedText> : null}
+        <View style={styles.recordRow}>
+          {idle ? (
+            <IconButton label="🖼" onPress={handleImport} accessibilityLabel="Choose from library" />
+          ) : (
+            <View style={styles.iconSpacer} />
+          )}
+          <RecordButton
+            recording={recording}
+            disabled={counting}
+            onPress={recording ? stopRecording : beginCountdown}
           />
-        ) : (
-          <>
-            {error ? <ThemedText style={styles.error}>{error}</ThemedText> : null}
-            <RecordButton
-              recording={recording}
-              disabled={counting}
-              onPress={recording ? stopRecording : beginCountdown}
-            />
-            <ThemedText style={styles.recordHint}>
-              {recording
-                ? 'Recording… tap to stop'
-                : counting
-                  ? 'Get set…'
-                  : 'Tap to record your swing'}
-            </ThemedText>
-          </>
-        )}
+          <View style={styles.iconSpacer} />
+        </View>
+        <ThemedText style={styles.recordHint}>
+          {recording
+            ? 'Recording… tap to stop'
+            : counting
+              ? 'Get set…'
+              : 'Tap to record, or pick a swing from your library'}
+        </ThemedText>
       </View>
     </View>
   );
@@ -300,9 +380,13 @@ export default function CaptureScreen() {
 function PermissionGate({
   canRequest,
   onRequest,
+  onImport,
+  error,
 }: {
   canRequest: boolean;
   onRequest: () => void;
+  onImport: () => void;
+  error: string | null;
 }) {
   return (
     <Centered>
@@ -310,18 +394,60 @@ function PermissionGate({
         Camera access
       </ThemedText>
       <ThemedText style={styles.dim}>
-        SwingSight needs your camera to record your swing. Your video stays private and you control
-        what’s kept.
+        SwingSight needs your camera to record your swing — or you can pick an existing swing from
+        your library. Your video stays private and you control what’s kept.
       </ThemedText>
+      {error ? <ThemedText style={styles.error}>{error}</ThemedText> : null}
       <View style={styles.gap}>
         {canRequest ? (
           <Button label="Allow camera" onPress={onRequest} />
         ) : (
           <Button label="Open Settings" onPress={() => Linking.openSettings()} />
         )}
+        <Button
+          label="Choose from library"
+          variant="secondary"
+          onPress={onImport}
+          style={styles.gap}
+        />
         <Button label="Back" variant="secondary" onPress={() => router.back()} style={styles.gap} />
       </View>
     </Centered>
+  );
+}
+
+/**
+ * The review step for both recorded and imported clips. Renders without the camera so it can sit
+ * above the camera-permission gate — an imported clip never needs camera access.
+ */
+function ReviewLayout({
+  captured,
+  view,
+  handedness,
+  insets,
+  onRetake,
+  onAnalyze,
+}: {
+  captured: Captured;
+  view: SwingView;
+  handedness: string;
+  insets: EdgeInsets;
+  onRetake: () => void;
+  onAnalyze: () => void;
+}) {
+  return (
+    <View style={styles.root}>
+      <CapturePreview uri={captured.uri} />
+      <View style={[styles.bottomBar, { paddingBottom: insets.bottom + 18 }]}>
+        <ReviewControls
+          captured={captured}
+          view={view}
+          handedness={handedness}
+          onRetake={onRetake}
+          onAnalyze={onAnalyze}
+        />
+      </View>
+    </View>
   );
 }
 
@@ -395,13 +521,22 @@ function ReviewControls({
   onAnalyze: () => void;
 }) {
   const viewLabel = view === 'face_on' ? 'Face-on' : 'Down-the-line';
+  const imported = captured.source === 'imported';
+  const duration = captured.durationSec > 0 ? `${captured.durationSec.toFixed(1)}s` : 'Imported clip';
+  // Imports show their real dimensions; recordings advertise the capture target instead.
+  const detail = imported
+    ? captured.width && captured.height
+      ? `${captured.width}×${captured.height}`
+      : 'From library'
+    : `1080p target · ${CAPTURE.targetFps} fps`;
   return (
     <View style={styles.review}>
       <View style={styles.reviewMeta}>
-        <ThemedText style={styles.reviewTitle}>Swing captured</ThemedText>
+        <ThemedText style={styles.reviewTitle}>
+          {imported ? 'Swing selected' : 'Swing captured'}
+        </ThemedText>
         <ThemedText style={styles.reviewStats}>
-          {captured.durationSec.toFixed(1)}s · {formatSize(captured.sizeBytes)} · 1080p target ·{' '}
-          {CAPTURE.targetFps} fps
+          {duration} · {formatSize(captured.sizeBytes)} · {detail}
         </ThemedText>
         <ThemedText style={styles.reviewStats}>
           {viewLabel} · {handedness === 'RH' ? 'Right-handed' : 'Left-handed'}
@@ -411,17 +546,31 @@ function ReviewControls({
         </ThemedText>
       </View>
       <View style={styles.reviewButtons}>
-        <Button label="Retake" variant="secondary" onPress={onRetake} style={styles.flex} />
+        <Button
+          label={imported ? 'Choose another' : 'Retake'}
+          variant="secondary"
+          onPress={onRetake}
+          style={styles.flex}
+        />
         <Button label="Analyze swing" onPress={onAnalyze} style={styles.flex} />
       </View>
     </View>
   );
 }
 
-function IconButton({ label, onPress }: { label: string; onPress: () => void }) {
+function IconButton({
+  label,
+  onPress,
+  accessibilityLabel,
+}: {
+  label: string;
+  onPress: () => void;
+  accessibilityLabel?: string;
+}) {
   return (
     <Pressable
       accessibilityRole="button"
+      accessibilityLabel={accessibilityLabel}
       onPress={onPress}
       style={({ pressed }) => [styles.iconButton, pressed && styles.iconPressed]}
     >
@@ -534,6 +683,13 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 12,
     paddingHorizontal: 20,
+  },
+  recordRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    alignSelf: 'stretch',
+    paddingHorizontal: 24,
   },
   recordHint: { color: 'rgba(255,255,255,0.85)', fontSize: 13 },
   error: { color: Brand.danger, fontSize: 13, fontWeight: '600' },

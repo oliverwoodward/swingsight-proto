@@ -17,6 +17,7 @@ from __future__ import annotations
 import logging
 import os
 import tempfile
+import time
 
 from .config import Settings
 from .pipeline import assemble, keyframes, transcode
@@ -82,13 +83,35 @@ def process_analysis(
         # annotated keyframe JPEGs (no R2 round-trip). Wrapped so a coaching failure can
         # never knock the row off `complete` — generate_coaching itself never raises, but
         # the write-back could, and the measurement is the source of truth.
+        # generate_coaching is designed never to raise (worst case a deterministic template),
+        # but we still guard it so an unexpected failure can't knock the row off `complete`
+        # (the measurement is the source of truth). The write CAN fail on a transient Supabase
+        # hiccup — which would otherwise leave `coaching` null and the app stuck on an endless
+        # "Writing your feedback…" state — so retry it a few times before giving up.
         try:
             coaching_result = coaching.generate_coaching(
                 settings, result, rendered, view, handedness
             )
-            writeback.write_coaching(client, analysis_id, coaching_result)
-        except Exception:  # noqa: BLE001
-            logger.exception("coaching step failed for %s (row stays complete)", analysis_id)
+        except Exception:  # noqa: BLE001 — defensive; generate_coaching should never raise
+            logger.exception("coaching generation failed for %s (row stays complete)", analysis_id)
+            coaching_result = None
+
+        if coaching_result is not None:
+            for attempt in range(3):
+                try:
+                    writeback.write_coaching(client, analysis_id, coaching_result)
+                    break
+                except Exception:  # noqa: BLE001
+                    logger.exception(
+                        "coaching write failed for %s (attempt %d/3)", analysis_id, attempt + 1
+                    )
+                    if attempt < 2:
+                        time.sleep(0.5 * (attempt + 1))
+            else:
+                logger.error(
+                    "coaching write gave up for %s after 3 attempts (row stays complete)",
+                    analysis_id,
+                )
 
         # --- Phase 6: the drill-then-recheck step (DETERMINISTIC; a couple of DB reads +
         # arithmetic, no LLM). Like coaching it runs AFTER write_complete and writes its

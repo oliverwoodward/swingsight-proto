@@ -1,0 +1,37 @@
+{
+  "$comment": "Project-level Claude Code settings. The allow-list covers the safe, read-only and verify commands used constantly in this repo so they don't prompt each turn. The deny-list protects files that hold LIVE credentials from being read into context. See ./CLAUDE.md.",
+  "permissions": {
+    "allow": [
+      "Bash(cd:*)",
+      "Bash(ls:*)",
+      "Bash(find:*)",
+      "Bash(grep:*)",
+      "Bash(rg:*)",
+      "Bash(cat:*)",
+      "Bash(head:*)",
+      "Bash(tail:*)",
+      "Bash(wc:*)",
+      "Bash(git status:*)",
+      "Bash(git log:*)",
+      "Bash(git diff:*)",
+      "Bash(git show:*)",
+      "Bash(git branch:*)",
+      "Bash(npx tsc:*)",
+      "Bash(npx expo lint:*)",
+      "Bash(python3 -m py_compile:*)",
+      "Bash(scripts/determinism_check.sh:*)",
+      "Bash(./scripts/determinism_check.sh:*)",
+      "Bash(scripts/validation_check.sh:*)",
+      "Bash(./scripts/validation_check.sh:*)"
+    ],
+    "deny": [
+      "Read(setup.env)",
+      "Read(.env)",
+      "Read(.env.*)",
+      "Read(supabase/vault-secrets.sql)",
+      "Read(**/*.pem)",
+      "Read(**/*.p8)",
+      "Read(**/*.p12)"
+    ]
+  }
+}

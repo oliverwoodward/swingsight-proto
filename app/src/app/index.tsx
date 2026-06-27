@@ -67,6 +67,11 @@ export default function Index() {
               {profile.handedness === 'RH' ? 'Right-handed' : 'Left-handed'} · {viewLabel}
             </ThemedText>
             <Button label="Record a swing" onPress={() => router.push('/capture')} />
+            <Button
+              label="Upload a swing"
+              variant="secondary"
+              onPress={() => router.push({ pathname: '/capture', params: { pick: '1' } })}
+            />
           </View>
         </View>
 

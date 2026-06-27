@@ -25,17 +25,30 @@ const STAGE_LABELS = [
 export default function ProcessingScreen() {
   const insets = useSafeAreaInsets();
   const { profile } = useProfile();
-  const params = useLocalSearchParams<{ uri: string; view: SwingView; handedness: Handedness }>();
+  const params = useLocalSearchParams<{
+    uri: string;
+    view: SwingView;
+    handedness: Handedness;
+    ext?: string;
+    contentType?: string;
+  }>();
 
   const fileUri = typeof params.uri === 'string' ? params.uri : '';
   const view: SwingView = params.view === 'dtl' ? 'dtl' : 'face_on';
   const handedness: Handedness = params.handedness === 'LH' ? 'LH' : 'RH';
+  // Imported clips supply their own ext/content type (e.g. mp4); recordings omit these so the
+  // runner falls back to its mov/quicktime defaults.
+  const ext = typeof params.ext === 'string' && params.ext ? params.ext : undefined;
+  const contentType =
+    typeof params.contentType === 'string' && params.contentType ? params.contentType : undefined;
 
   const { phase, uploadProgress, record, error, retry } = useAnalysisRunner({
     profileId: profile?.id ?? null,
     fileUri,
     view,
     handedness,
+    ext,
+    contentType,
   });
 
   // Rotate the encouraging stage labels while the worker runs.
@@ -74,7 +87,7 @@ export default function ProcessingScreen() {
 
       {phase === 'unreadable' ? (
         <View style={styles.actions}>
-          <Button label="Record again" onPress={() => router.replace('/capture')} />
+          <Button label="Try another swing" onPress={() => router.replace('/capture')} />
           <Button label="Back" variant="secondary" onPress={() => router.replace('/')} style={styles.gap} />
         </View>
       ) : phase === 'failed' ? (
