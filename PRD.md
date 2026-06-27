@@ -324,6 +324,20 @@ free TypeScript.** When you change a shape here, the worker's output must match.
     isolated); the only measurement-payload change is the additive `observationFaultId`, verified
     byte-identical. Mirror touched all 3 legs: `gating.{ts,py}` (`pickObservationFault`),
     `types.ts`, and the `observation_fault_id` migration + column-guard.
+  - **Metric `inRange` must be a NATIVE bool — numpy bool_ breaks the writeback (2026-06-27).**
+    `is_in_friendly_range` does a chained comparison on the metric value; when that value is a
+    numpy float (only `follow_through_completion`, which falls out of `np.max`/`np.min`), it
+    returns a `numpy.bool_`, which `json.dumps` cannot serialise → "Object of type bool is not
+    JSON serializable" crashes `write_complete` and flips the row to `failed`. Latent and
+    pre-existing, but the confidence retune SURFACED it: more metrics now clear the 0.5 gate to
+    `status=ok`, so `inRange` is computed from the (numpy) value instead of defaulting to the
+    literal `False` — and it only bites when the `ok` value isn't clamped to a Python-float
+    boundary (so the IMG_5736 sample, whose follow-through clamps to 0.0, never reproduced it;
+    a real on-device DTL clip with follow-through conf 0.529 / value 0.515 did). Fix:
+    `metrics._build` wraps `in_range = bool(is_in_friendly_range(...))`. `q()` already coerces
+    every numeric field, and `score.withheld` is already `bool()`-wrapped, so `inRange` was the
+    one gap. Determinism byte-identical (same sha256). Lesson: any bool entering the payload
+    from a numpy comparison must be `bool()`-wrapped.
   - **Coaching write is retried + the app spinner is bounded (2026-06-27).** `generate_coaching`
     never raises (template floor), so a null `coaching` column only ever came from a transient
     `write_coaching` DB failure that `process.py` swallowed silently — leaving the report stuck
