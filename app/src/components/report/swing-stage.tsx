@@ -100,6 +100,7 @@ function computeFrame(
   fit: ReturnType<typeof computeContainFit>,
   resolved: ResolvedHighlight | null,
   faultConfidence: number,
+  tentative: boolean,
 ): OverlayFrame {
   const lm = interpolateFrame(series, t);
   if (!lm) return EMPTY_FRAME;
@@ -135,7 +136,9 @@ function computeFrame(
       return { x: P.x, y: P.y, v: k.visibility };
     });
     const meanVis = pts.reduce((s, p) => s + p.v, 0) / Math.max(pts.length, 1);
-    const crisp = faultConfidence >= LOW_CONFIDENCE && meanVis >= HILITE_VIS;
+    // A tentative (soft_only) fault never gets a crisp red line — it's a words-only
+    // observation, so it always degrades to the soft region regardless of confidence.
+    const crisp = !tentative && faultConfidence >= LOW_CONFIDENCE && meanVis >= HILITE_VIS;
     const span = Math.max(fit.drawWidth, fit.drawHeight);
 
     if (crisp && pts.length >= 2) {
@@ -202,9 +205,13 @@ export function SwingStage({
   // Resolve the library-owned highlight (segment + phase window) for the chosen fault.
   const entry = highlightFaultId ? findFault(highlightFaultId) : undefined;
   const resolved = entry ? resolveFaultHighlight(entry, handedness, events) : null;
-  const faultConfidence = highlightFaultId
-    ? faults.find((f) => f.faultId === highlightFaultId)?.confidence ?? 0
-    : 0;
+  const evaluation = highlightFaultId
+    ? faults.find((f) => f.faultId === highlightFaultId)
+    : undefined;
+  const faultConfidence = evaluation?.confidence ?? 0;
+  // A soft_only (not claim-eligible) fault is a tentative observation → keep the overlay
+  // soft, never a crisp line. Reads the eval's own structural flag, not a UI guess.
+  const tentative = evaluation ? !evaluation.claimEligible : false;
 
   // The 60fps sync loop: read currentTime, project, publish to the SharedValue.
   useEffect(() => {
@@ -214,12 +221,12 @@ export function SwingStage({
     const loop = () => {
       const t = player.currentTime ?? 0;
       time.value = t;
-      frame.value = computeFrame(series, t, fit, resolved, faultConfidence);
+      frame.value = computeFrame(series, t, fit, resolved, faultConfidence, tentative);
       raf = requestAnimationFrame(loop);
     };
     raf = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(raf);
-  }, [player, series, size.w, size.h, resolved, faultConfidence, time, frame]);
+  }, [player, series, size.w, size.h, resolved, faultConfidence, tentative, time, frame]);
 
   const skeleton = useDerivedValue(() => buildLines(frame.value.lines), [frame]);
   const skeletonDim = useDerivedValue(() => buildLines(frame.value.dim), [frame]);

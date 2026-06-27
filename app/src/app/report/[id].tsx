@@ -1,5 +1,5 @@
 import { router, useLocalSearchParams } from 'expo-router';
-import { useRef, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useSharedValue } from 'react-native-reanimated';
@@ -27,6 +27,18 @@ export default function ReportScreen() {
   const seek = (t: number) => {
     if (playerRef.current) playerRef.current.currentTime = t;
   };
+
+  // Coaching arrives a beat after `complete` (a second Realtime update). If the worker's
+  // coaching write never lands (e.g. a transient DB failure), don't spin "Writing your
+  // feedback…" forever — bound the wait and fall back to a graceful note. setState only
+  // happens inside the (async) timeout, so this doesn't trip the set-state-in-effect rule.
+  const [coachingTimedOut, setCoachingTimedOut] = useState(false);
+  const awaitingCoaching = record?.status === 'complete' && !record?.coaching;
+  useEffect(() => {
+    if (!awaitingCoaching) return;
+    const timer = setTimeout(() => setCoachingTimedOut(true), 20000);
+    return () => clearTimeout(timer);
+  }, [awaitingCoaching]);
 
   const duration = series && series.frames.length > 0 ? series.frames[series.frames.length - 1].t : 0;
 
@@ -106,7 +118,9 @@ export default function ReportScreen() {
             events={events}
             faults={record.faults}
             handedness={record.handedness}
-            highlightFaultId={coaching?.chosenFaultId ?? record.primaryFaultId}
+            highlightFaultId={
+              coaching?.chosenFaultId ?? record.primaryFaultId ?? record.observationFaultId
+            }
             time={time}
             playerRef={playerRef}
           />
@@ -129,12 +143,26 @@ export default function ReportScreen() {
         <View style={styles.section}>
           {coaching ? (
             <>
+              {coaching.tentative ? (
+                <ThemedText style={styles.tentativeKicker}>Tentative observation</ThemedText>
+              ) : null}
               <ThemedText style={styles.headline}>{coaching.headline}</ThemedText>
               <ThemedText style={styles.why}>{coaching.why}</ThemedText>
+              {coaching.chain ? (
+                <View style={styles.chainBlock}>
+                  <ThemedText style={styles.chainKicker}>How it connects</ThemedText>
+                  <ThemedText style={styles.why}>{coaching.chain}</ThemedText>
+                </View>
+              ) : null}
               {coaching.ballFlightNote ? (
                 <ThemedText style={styles.ballFlight}>{coaching.ballFlightNote}</ThemedText>
               ) : null}
             </>
+          ) : coachingTimedOut ? (
+            <ThemedText style={styles.why}>
+              We couldn’t put written feedback together for this swing. Your measurements and
+              the highlighted areas above still show what to work on.
+            </ThemedText>
           ) : (
             <View style={styles.pending}>
               <ActivityIndicator color={Brand.accent} size="small" />
@@ -230,10 +258,27 @@ function ScoreCard({ score }: { score: SwingScore }) {
 }
 
 function MetricsList({ metrics }: { metrics: Metric[] }) {
-  const shown = metrics.filter((m) => m.status !== 'unmeasurable_view');
+  // Hide metrics we couldn't honestly measure: `unmeasurable_view` (wrong camera angle for
+  // this metric) and `implausible` (a degenerate value — e.g. a motion-blurred wrist giving an
+  // impossible elbow angle, or a collapsed 2D turn proxy). Per the governing law we exclude
+  // those rather than show a fabricated-looking number; `low_confidence` stays (tracked, just
+  // not confident this swing) and renders as '—'.
+  const shown = metrics.filter(
+    (m) => m.status !== 'unmeasurable_view' && m.status !== 'implausible',
+  );
+  if (shown.length === 0) return null;
+  // When nothing measured confidently, a wall of '—' reads as a broken report. Say so
+  // honestly and point at the fix, rather than silently showing dashes.
+  const noneMeasurable = !shown.some((m) => m.status === 'ok');
   return (
     <View style={styles.section}>
       <ThemedText style={styles.sectionTitle}>Supporting metrics</ThemedText>
+      {noneMeasurable ? (
+        <ThemedText style={styles.metricsHint}>
+          We couldn’t measure this swing confidently. Film side-on from about 2–3 m with
+          your whole body in frame and good, even light, then record again.
+        </ThemedText>
+      ) : null}
       {shown.map((m) => (
         <MetricRow key={m.key} metric={m} />
       ))}
@@ -326,6 +371,20 @@ const styles = StyleSheet.create({
 
   headline: { color: '#fff', fontSize: 24, fontWeight: '800', lineHeight: 30 },
   why: { color: 'rgba(255,255,255,0.82)', fontSize: 16, lineHeight: 24 },
+  tentativeKicker: {
+    color: Brand.highlight,
+    fontSize: 12,
+    fontWeight: '800',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  chainBlock: { marginTop: 10, gap: 4 },
+  chainKicker: {
+    color: 'rgba(255,255,255,0.6)',
+    fontSize: 13,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+  },
   ballFlight: { color: Brand.highlight, fontSize: 14, lineHeight: 21, fontStyle: 'italic', marginTop: 2 },
   pending: { flexDirection: 'row', alignItems: 'center', gap: 10 },
 
@@ -361,6 +420,7 @@ const styles = StyleSheet.create({
   metricLabel: { color: '#fff', fontSize: 15, fontWeight: '600' },
   metricRange: { color: 'rgba(255,255,255,0.5)', fontSize: 12 },
   metricValue: { color: '#fff', fontSize: 15, fontWeight: '700', fontVariant: ['tabular-nums'] },
+  metricsHint: { color: 'rgba(255,255,255,0.55)', fontSize: 13, lineHeight: 19 },
 
   footer: { paddingHorizontal: 20, paddingTop: 24 },
 });

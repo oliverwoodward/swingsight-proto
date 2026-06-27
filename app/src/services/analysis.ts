@@ -49,6 +49,7 @@ interface AnalysisRow {
   keypoints_meta: Omit<KeypointSeries, 'frames'> | null;
   faults: FaultEvaluation[] | null;
   primary_fault_id: string | null;
+  observation_fault_id: string | null;
   score: SwingScore | null;
   coaching: CoachingResult | null;
   quality: QualityReport | null;
@@ -94,6 +95,7 @@ export interface AnalysisRecord {
   playbackObjectKey: string | null;
   faults: FaultEvaluation[];
   primaryFaultId: string | null;
+  observationFaultId: string | null;
   score: SwingScore | null;
   coaching: CoachingResult | null;
   quality: QualityReport | null;
@@ -110,6 +112,7 @@ function mapAnalysis(row: AnalysisRow): AnalysisRecord {
     playbackObjectKey: row.playback_video_url,
     faults: row.faults ?? [],
     primaryFaultId: row.primary_fault_id,
+    observationFaultId: row.observation_fault_id,
     score: row.score,
     coaching: row.coaching,
     quality: row.quality,

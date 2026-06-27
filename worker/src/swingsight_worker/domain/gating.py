@@ -120,3 +120,32 @@ def pick_primary_fault(
         if score > best_score:
             best, best_score = e, score
     return best
+
+
+def pick_observation_fault(
+    evaluations: list[dict],
+    severity_weight_of: Callable[[str], float],
+) -> Optional[dict]:
+    """Among the evaluated faults, pick the top TENTATIVE observation: same
+    magnitude × severityWeight ranking as pick_primary_fault, but the INVERSE claim
+    filter — a fired, adequately-confident, plausible fault that is NOT claim-eligible
+    (a soft_only proxy). This is what the coaching layer may hedge on when no
+    claim-eligible primary cleared the bar; it is never the primary claim. Returns None
+    when nothing qualifies. Mirror of pickObservationFault."""
+    eligible = [
+        e
+        for e in evaluations
+        if e["fired"]
+        and e["confidence"] >= LOW_CONFIDENCE
+        and e["status"] == "ok"
+        and not e.get("claimEligible", True)
+    ]
+    if not eligible:
+        return None
+    best = eligible[0]
+    best_score = best["magnitude"] * severity_weight_of(best["faultId"])
+    for e in eligible[1:]:
+        score = e["magnitude"] * severity_weight_of(e["faultId"])
+        if score > best_score:
+            best, best_score = e, score
+    return best

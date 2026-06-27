@@ -31,6 +31,7 @@ from ..domain.gating import (
     assess_metric_status,
     is_in_friendly_range,
 )
+from .domain_const import calibrate_visibility
 from .types import NormalizedClip, PoseSeries, SwingEvents
 
 logger = logging.getLogger("swingsight.worker.metrics")
@@ -100,7 +101,18 @@ def _build(
 ) -> tuple[dict, float]:
     meta = METRIC_META[key]
     vis = geo.vis_of(indices, frames)
-    engine_conf = max(0.0, min(1.0, vis * evt_conf * geo.clip.normalization_confidence))
+    # `vis` is raw BlazePose visibility (≈0.5 even for a clearly-seen joint) and `evt_conf`
+    # already folds in wrist-visibility and fps-normalisation, so the old straight product
+    # `vis * evt_conf * normalization_confidence` stacked the same sub-1.0 penalties two-to-
+    # three times and buried well-shot swings — a cleanly-filmed swing measured ≈0.25 against
+    # the 0.5 gate, blanking every metric, withholding the score, and starving the fault
+    # gates (so coaching fell back to the generic template). Combine the two evidence signals
+    # via their geometric mean so "clearly visible but imperfect" reads confidently, while
+    # genuinely poor evidence (very low visibility or a badly-localised event) still degrades.
+    # `vis` is first calibrated (raw ≈0.5 = "clearly present", see domain_const) so the geo
+    # mean isn't anchored to BlazePose's 0.5 floor; fps-normalisation is already carried
+    # inside `evt_conf` (detect_events bakes it into detection_conf), so it is not re-applied.
+    engine_conf = max(0.0, min(1.0, math.sqrt(calibrate_visibility(max(0.0, vis)) * max(0.0, evt_conf))))
     status = assess_metric_status(value, meta)
     if status == "ok" and engine_conf < LOW_CONFIDENCE:
         status = "low_confidence"

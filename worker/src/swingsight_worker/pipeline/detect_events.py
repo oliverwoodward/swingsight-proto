@@ -21,6 +21,7 @@ import logging
 import numpy as np
 
 from ..domain import keypoints as K
+from .domain_const import calibrate_visibility
 from .types import NormalizedClip, PoseSeries, SwingEvents
 
 logger = logging.getLogger("swingsight.worker.events")
@@ -150,7 +151,15 @@ def _assemble(
         wrist_vis = float(
             0.5 * (pose.image[fi, K.LEFT_WRIST, 2] + pose.image[fi, K.RIGHT_WRIST, 2])
         )
-        conf = _clamp(detection_conf * directness[name] * (0.5 + 0.5 * wrist_vis), 0.0, 1.0)
+        # Calibrate the per-event wrist visibility (raw ≈0.5 = "clearly seen") so a
+        # cleanly-filmed event isn't anchored at half-confidence. The detection_conf
+        # base term above keeps RAW wrist_vis on purpose — it feeds the no_swing_detected
+        # quality gate, whose threshold must not move.
+        conf = _clamp(
+            detection_conf * directness[name] * (0.5 + 0.5 * calibrate_visibility(wrist_vis)),
+            0.0,
+            1.0,
+        )
         events[name] = {"frameIndex": fi, "t": float(times[fi]), "confidence": conf}
 
     keyframe_indices = sorted({events[name]["frameIndex"] for name in EVENT_ORDER})

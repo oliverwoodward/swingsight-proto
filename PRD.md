@@ -1,6 +1,6 @@
 # SwingSight — PRD & Build Progress (single source of truth)
 
-> **Last updated:** 2026-06-26 · **Current phase:** Phases 0–6 ✅ DONE + LIVE; **Phase 7 (the last build phase) 🟢 CODE-COMPLETE + GREEN** — the validation layer (golden-set + per-fault regression + the structural claim-eligibility gate), the privacy delete/export flow + no-PII-LLM audit, and the EAS/TestFlight config are all built and verified (`scripts/validation_check.sh`, `determinism_check.sh`, `py_compile`, `tsc` all GREEN). **The gate is proven on the real sample:** the two approximate-proxy faults (`reverse_spine_angle`, `over_the_top`) are now `soft_only` — `reverse_spine_angle` still fires but is suppressed from the primary claim, so the sample reports "no clear priority fault" (the honest output) instead of highlighting a crude 2D proxy. **The worker is redeployed (revision `swingsight-worker-00004-wl9`) and the gate is LIVE-PROVEN** — a fresh analysis of the sample through the live worker returns `primaryFaultId=null` / "no clear priority fault" with `reverse_spine_angle` fired-but-suppressed (`claimEligible=false`), instead of highlighting a crude 2D proxy. **Both privacy Edge Functions (`delete-account`, `export-data`) are deployed + ACTIVE.** **The only remainders are inherently human/interactive (USER hand-offs, see §9):** real coach labels for the golden set (never fabricated — the harness reports 0 labels transparently until then), and the interactive `eas build`/`eas submit` to TestFlight (Apple login + 2FA; runbook `app/EAS_DEPLOY.md`). Retention-window reconciliation was DEFERRED for the prototype (USER's call). — Prior: **the user confirmed the first on-device run** (`npx expo run:ios --device`), clearing the last device checkpoints (Phase 1 capture, Phase 4 upload→worker→live status, Phase 5 report). Phase 6 (drill-then-recheck + history/trends) is DONE + LIVE-PROVEN. The worker was redeployed (revision `swingsight-worker-00003`) and `scripts/recheck_checkpoint.sh` drove two same-view swings end to end → both `complete` (primary fault `reverse_spine_angle`), and the 2nd got a `drill_recheck` row (`drill_id=tilt_away_drill`, `target_metric_key=reverse_spine_deg`, `previous=20.0132`, `current=20.0122`, `delta=-0.001`, `improved=true`) — the report leads with it as "Holding steady / about the same" (the −0.001 is sub-threshold cross-host neural noise, correctly absorbed; see §7). **Phase 6 — the drill-then-recheck loop + history/trends — is built end to end on top of the live Phase 4/5 loop:** **(A)** the app stores the recheck LINK on insert (`AnalysisService.findPreviousAnalysisId` → `previous_analysis_id` = the most recent COMPLETE *same-view* analysis, so the worker compares like with like; the device only supplies the link, never a value); **(B)** a new **deterministic** worker step (`worker/recheck.py`) runs AFTER `write_complete` (like coaching, so it's OUT of the measurement payload + `run_local.py` and determinism stays byte-identical): it reads the prior analysis's chosen fault (`coaching.chosenFaultId ?? primary_fault_id`), that fault's prescribed drill (→ the tracked metric + improvement direction), the prior + current `ok` measured values of that metric, computes a `delta` + direction-aware `improved`, and writes a `drill_recheck` row — writing **nothing** if there's no honest comparison (first swing / cross-view / metric not `ok` / no fault); **(C)** the report now **leads with the comparison** (`RecheckBanner`, direction-aware honest copy, friendly ranges not raw degrees for approximate metrics, no fabricated comparison when none exists); **(D)** Home + a new `/history` route show past swings (view/fault/score + a Skia mini-skeleton thumbnail from the `top` keyframe's measured pose) and a **tempo-over-time trend** (Skia sparkline). **Verified GREEN:** worker `py_compile`, `scripts/determinism_check.sh` (byte-identical WITH the recheck step in the tree — it's structurally isolated), app `tsc`. Live proof = the USER redeploys the worker (`scripts/deploy-worker.sh`) then runs `scripts/recheck_checkpoint.sh` (two same-view swings → a `drill_recheck` row on the 2nd; same clip twice → `delta ≈ 0`). — Prior context: Built on top of the GREEN Phase-3 worker: **(5a)** the worker's Claude Haiku 4.5 coaching call (`worker/coaching.py`) — runs AFTER `write_complete`, constrained structured output via `messages.parse()`, validates the LLM's fault choice against the open CV gates + discards any score/joints/frames, deterministic template fallback on any failure, writes only the `coaching` jsonb; **(B)** the `playback-url` Edge Function (presigned GET, symmetric to `upload-url`); **(4)** the app `AnalysisService` + `useAnalysisRunner` + `processing.tsx` state-machine screen, wired into `capture.tsx`; **(5b)** the report screen `report/[id].tsx` — expo-video playback + Skia skeleton overlay synced via a rAF→Reanimated-SharedValue loop, library-owned confidence-gated fault highlight, headline/why/drill/metrics/score/PhaseScrubber. App `tsc` GREEN; worker `py_compile` GREEN; determinism GREEN (byte-identical on the Cloud-Run-parity image WITH coaching in the tree — it's isolated from the measurement payload). **Worker redeployed with `ANTHROPIC_API_KEY` + `playback-url` deployed, and the live coaching call is PROVEN on real infra:** `scripts/checkpoint.sh` → `complete`, `coaching` jsonb `source:"llm"`, `chosenFaultId` ∈ open gates (= the CV primary `reverse_spine_angle`), drill `tilt_away_drill`, `llmConfidence` 0.85, score gracefully `withheld` on the far/low-conf sample. **iOS now BUILDS GREEN** for simulator + physical device (arm64, code-signed): fixed the Xcode-26/Swift-6.2 incompatibility in `expo-modules-jsi`/`-core` (`weak let` → `nonisolated(unsafe) weak var`) durably via **patch-package** (`app/patches/` + a `postinstall` hook), and changed the bundle id `com.swingsight.app` → `com.swingsight.proto` (the original was taken by another Apple team). **Only remaining:** the USER runs `cd app && npx expo run:ios --device` (compiles/signs/installs/launches) for the first true end-to-end run.
+> **Last updated:** 2026-06-27 · **Current phase:** Phases 0–7 🟢 CODE-COMPLETE + GREEN. **Latest (2026-06-27) — fixed the "no AI coaching / blank metrics / no chain" report.** Three changes, all GREEN (`tsc`, `expo lint`, `py_compile`, `determinism_check.sh` byte-identical, full `validation_check.sh` exit 0): **(C)** a visibility calibration (`pipeline/domain_const.calibrate_visibility`) layered on the geometric-mean fix so a well-shot swing populates its metrics instead of dashing out just under the 0.5 gate; **(A)** a TENTATIVE coaching tier — a fired `soft_only` fault (the common DTL "over_the_top — worth a look" case) now drives *hedged* coaching via a new deterministic `observation_fault_id`, instead of the canned "Looking solid"; **(B)** a `chain` field so the AI explains how the one fault cascades through the rest of the swing. Proven on the real sample: face_on now reads 8/10 metrics `ok`, score un-withholds (30), primary `excessive_head_movement`; the DTL observation path returns hedged over_the_top coaching + a chain. Mirror touched all 3 legs (`gating.{ts,py}`, `types.ts`, an `observation_fault_id` migration). **NOT yet deployed** — worker redeploy (`scripts/deploy-worker.sh`) is the USER's call. Detail in §7 + §7b. — Prior: **Phase 7 (the last build phase) 🟢 CODE-COMPLETE + GREEN** — the validation layer (golden-set + per-fault regression + the structural claim-eligibility gate), the privacy delete/export flow + no-PII-LLM audit, and the EAS/TestFlight config are all built and verified (`scripts/validation_check.sh`, `determinism_check.sh`, `py_compile`, `tsc` all GREEN). **The gate is proven on the real sample:** the two approximate-proxy faults (`reverse_spine_angle`, `over_the_top`) are now `soft_only` — `reverse_spine_angle` still fires but is suppressed from the primary claim, so the sample reports "no clear priority fault" (the honest output) instead of highlighting a crude 2D proxy. **The worker is redeployed (revision `swingsight-worker-00004-wl9`) and the gate is LIVE-PROVEN** — a fresh analysis of the sample through the live worker returns `primaryFaultId=null` / "no clear priority fault" with `reverse_spine_angle` fired-but-suppressed (`claimEligible=false`), instead of highlighting a crude 2D proxy. **Both privacy Edge Functions (`delete-account`, `export-data`) are deployed + ACTIVE.** **The only remainders are inherently human/interactive (USER hand-offs, see §9):** real coach labels for the golden set (never fabricated — the harness reports 0 labels transparently until then), and the interactive `eas build`/`eas submit` to TestFlight (Apple login + 2FA; runbook `app/EAS_DEPLOY.md`). Retention-window reconciliation was DEFERRED for the prototype (USER's call). — Prior: **the user confirmed the first on-device run** (`npx expo run:ios --device`), clearing the last device checkpoints (Phase 1 capture, Phase 4 upload→worker→live status, Phase 5 report). Phase 6 (drill-then-recheck + history/trends) is DONE + LIVE-PROVEN. The worker was redeployed (revision `swingsight-worker-00003`) and `scripts/recheck_checkpoint.sh` drove two same-view swings end to end → both `complete` (primary fault `reverse_spine_angle`), and the 2nd got a `drill_recheck` row (`drill_id=tilt_away_drill`, `target_metric_key=reverse_spine_deg`, `previous=20.0132`, `current=20.0122`, `delta=-0.001`, `improved=true`) — the report leads with it as "Holding steady / about the same" (the −0.001 is sub-threshold cross-host neural noise, correctly absorbed; see §7). **Phase 6 — the drill-then-recheck loop + history/trends — is built end to end on top of the live Phase 4/5 loop:** **(A)** the app stores the recheck LINK on insert (`AnalysisService.findPreviousAnalysisId` → `previous_analysis_id` = the most recent COMPLETE *same-view* analysis, so the worker compares like with like; the device only supplies the link, never a value); **(B)** a new **deterministic** worker step (`worker/recheck.py`) runs AFTER `write_complete` (like coaching, so it's OUT of the measurement payload + `run_local.py` and determinism stays byte-identical): it reads the prior analysis's chosen fault (`coaching.chosenFaultId ?? primary_fault_id`), that fault's prescribed drill (→ the tracked metric + improvement direction), the prior + current `ok` measured values of that metric, computes a `delta` + direction-aware `improved`, and writes a `drill_recheck` row — writing **nothing** if there's no honest comparison (first swing / cross-view / metric not `ok` / no fault); **(C)** the report now **leads with the comparison** (`RecheckBanner`, direction-aware honest copy, friendly ranges not raw degrees for approximate metrics, no fabricated comparison when none exists); **(D)** Home + a new `/history` route show past swings (view/fault/score + a Skia mini-skeleton thumbnail from the `top` keyframe's measured pose) and a **tempo-over-time trend** (Skia sparkline). **Verified GREEN:** worker `py_compile`, `scripts/determinism_check.sh` (byte-identical WITH the recheck step in the tree — it's structurally isolated), app `tsc`. Live proof = the USER redeploys the worker (`scripts/deploy-worker.sh`) then runs `scripts/recheck_checkpoint.sh` (two same-view swings → a `drill_recheck` row on the 2nd; same clip twice → `delta ≈ 0`). — Prior context: Built on top of the GREEN Phase-3 worker: **(5a)** the worker's Claude Haiku 4.5 coaching call (`worker/coaching.py`) — runs AFTER `write_complete`, constrained structured output via `messages.parse()`, validates the LLM's fault choice against the open CV gates + discards any score/joints/frames, deterministic template fallback on any failure, writes only the `coaching` jsonb; **(B)** the `playback-url` Edge Function (presigned GET, symmetric to `upload-url`); **(4)** the app `AnalysisService` + `useAnalysisRunner` + `processing.tsx` state-machine screen, wired into `capture.tsx`; **(5b)** the report screen `report/[id].tsx` — expo-video playback + Skia skeleton overlay synced via a rAF→Reanimated-SharedValue loop, library-owned confidence-gated fault highlight, headline/why/drill/metrics/score/PhaseScrubber. App `tsc` GREEN; worker `py_compile` GREEN; determinism GREEN (byte-identical on the Cloud-Run-parity image WITH coaching in the tree — it's isolated from the measurement payload). **Worker redeployed with `ANTHROPIC_API_KEY` + `playback-url` deployed, and the live coaching call is PROVEN on real infra:** `scripts/checkpoint.sh` → `complete`, `coaching` jsonb `source:"llm"`, `chosenFaultId` ∈ open gates (= the CV primary `reverse_spine_angle`), drill `tilt_away_drill`, `llmConfidence` 0.85, score gracefully `withheld` on the far/low-conf sample. **iOS now BUILDS GREEN** for simulator + physical device (arm64, code-signed): fixed the Xcode-26/Swift-6.2 incompatibility in `expo-modules-jsi`/`-core` (`weak let` → `nonisolated(unsafe) weak var`) durably via **patch-package** (`app/patches/` + a `postinstall` hook), and changed the bundle id `com.swingsight.app` → `com.swingsight.proto` (the original was taken by another Apple team). **Only remaining:** the USER runs `cd app && npx expo run:ios --device` (compiles/signs/installs/launches) for the first true end-to-end run.
 >
 > This is the living tracker for the SwingSight prototype. Any agent picking up work
 > should read this file top to bottom first, then continue from **§9 Phase status**.
@@ -267,6 +267,70 @@ free TypeScript.** When you change a shape here, the worker's output must match.
     tagged `approximate`, shown as ranges/soft, **excluded from the score**, and only the
     plausible ones gate a fault. Tightening them is Phase 7 validation work, not a launch
     blocker — the reliable metrics (tempo/head/lead-arm/follow-through/balance) carry Phase 3.
+  - **Metric confidence is a GEOMETRIC mean, not a raw product (fixed 2026-06-27).** A
+    well-framed swing was reporting blank metrics + "Paused" score + the generic "Looking
+    solid" coaching because `engine_conf` was `vis × evt_conf × normalization_confidence` —
+    and those factors *overlap*: `vis` is raw BlazePose visibility (~0.5 even for a clearly
+    seen joint), while `evt_conf` already folds in wrist-visibility (twice) and fps-norm
+    (`detect_events` bakes `detection_conf *= normalization_confidence`). Multiplying them
+    stacked the same sub-1.0 penalties 2-3×, so a clean swing measured ~0.25 against the 0.5
+    `LOW_CONFIDENCE` gate → every metric `low_confidence` → score withheld (<3 reliable `ok`)
+    → no fault cleared its gate → coaching fell to `_template_no_fault()`. Verified live: a
+    real DTL analysis had `meanKeypointConfidence=0.80` yet metric confidences 0.11-0.31.
+    Fix: `metrics.py` `_build` now uses `sqrt(vis × evt_conf)` (geometric mean; fps-norm is
+    already inside `evt_conf`, not re-applied) — counteracts the compounding so present-but-
+    imperfect evidence reads confidently while genuinely poor evidence still degrades. On the
+    sample (face_on) this flips 4 metrics to `ok`, un-withholds the score, and surfaces
+    `excessive_head_movement` as a real claim-eligible primary (was `null`). Worker-only (the
+    app reads results), so no TS-mirror change; `determinism_check.sh` byte-identical +
+    `validation_check.sh` GREEN. NOTE: `lead_elbow_flexion`/`shoulder_turn`/`backswing_seconds`
+    can still read `implausible` from genuinely DEGENERATE values (a 163°+ "elbow fold" from
+    the motion-blurred impact wrist; a collapsed 0° 2D turn proxy; a 3 s backswing when events
+    mis-bracket the untrimmed sample). These are correctly excluded by the plausible gate —
+    widening the range would put garbage on screen (governing law). So the report now HIDES
+    `implausible` metric rows (alongside `unmeasurable_view`) instead of showing confusing
+    labeled dashes; `low_confidence` rows stay (tracked, just not confident this swing) as `—`,
+    and an honest "couldn't measure confidently — re-record" line shows when *no* metric is
+    `ok`. Tightening the proxies / blurred-impact metric is still Phase-7 measurement work.
+  - **Visibility is CALIBRATED before it feeds confidence (2026-06-27, follow-on to the
+    geometric-mean fix).** Even with the geometric mean, raw BlazePose `visibility` ≈0.5 = "clearly
+    present" (not "half-confident") still anchored a clean swing at `engine_conf ≈ 0.49`, just under
+    the 0.5 gate → metrics blanked. `pipeline/domain_const.calibrate_visibility` linearly remaps raw
+    vis (floor 0.15 / ceil 0.55, so 0.5→0.875) and is applied at the THREE raw-vis→confidence entry
+    points only: `metrics.py` `engine_conf`, `detect_events.py` the per-event term, and `faults.py`
+    `driving_vis` (the cap + the keypoint gate). It is **deliberately NOT** applied to
+    `detect_events.py`'s `detection_conf` base term — that feeds the `no_swing_detected` quality
+    gate, so the unreadable floor stays byte-identical and still rejects a still/whiffed clip.
+    Worker-internal (the app reads `confidence`/`status` and only compares to the unchanged
+    `LOW_CONFIDENCE=0.5`), so no TS-mirror change. On the sample (face_on) confidences rise to
+    ~0.64–0.92, 8/10 metrics read `ok`, the score un-withholds (30), and `excessive_head_movement`
+    is the claim-eligible primary. `determinism_check.sh` byte-identical + `validation_check.sh` GREEN.
+  - **Soft_only faults now get TENTATIVE coaching + a CHAIN narrative (2026-06-27, USER-approved
+    change to the §7b gate).** The strict gate meant a swing whose only fired fault is a `soft_only`
+    proxy (the common DTL "over_the_top — worth a look" case) produced NO coaching at all — the
+    LLM never ran and the report showed the canned "Looking solid". Now `faults.evaluate_faults`
+    also returns `observation_fault_id` = the top fired `soft_only` fault **when there is no
+    claim-eligible primary** (a NEW deterministic field — in `serialize`/`writeback`/the SQL column
+    guard; `primary_fault_id` still means claim-eligible verdict only, so the hard-vs-soft
+    distinction stays explicit). `coaching.generate_coaching` gains a second tier: if no open gate
+    but an observation exists, it hands that ONE gate to the LLM marked `tentative`, the prompt
+    makes it hedge strongly ("tends to look like…", never a diagnosis), the result carries
+    `tentative:true`, the report shows a "Tentative observation" kicker, and `swing-stage.tsx` forces
+    the soft (never crisp) overlay by reading the eval's own `claimEligible`. Separately, the LLM
+    schema gained a `chain` field (2–4 sentences: how the one selected fault cascades through the
+    rest of the swing, grounded ONLY in the measured metrics — no invented numbers, no second fault);
+    the template floor fills `chain` from the fault's `explanation_hook`. The app renders it under
+    "How it connects". Both are coaching-layer / app changes (chain is post-`write_complete`,
+    isolated); the only measurement-payload change is the additive `observationFaultId`, verified
+    byte-identical. Mirror touched all 3 legs: `gating.{ts,py}` (`pickObservationFault`),
+    `types.ts`, and the `observation_fault_id` migration + column-guard.
+  - **Coaching write is retried + the app spinner is bounded (2026-06-27).** `generate_coaching`
+    never raises (template floor), so a null `coaching` column only ever came from a transient
+    `write_coaching` DB failure that `process.py` swallowed silently — leaving the report stuck
+    on "Writing your feedback…" forever. Now `process.py` guards the generate defensively and
+    retries the write 3× (0.5 s/1.0 s backoff) before giving up with an `error` log; and the
+    report bounds the spinner with a 20 s timeout → graceful "couldn't put feedback together"
+    fallback. Both stay OUT of the determinism payload (orchestration layer).
 - **Phase 3 Cloud Run deploy gotchas (live):** worker runs in GCP project **`swingsight-proto`**
   (`europe-west1`), URL `https://swingsight-worker-ayxycat24a-ew.a.run.app`. Deploy with
   `scripts/deploy-worker.sh` (idempotent: project/billing/APIs/key-fetch/deploy/secret-wire).
@@ -318,6 +382,14 @@ free TypeScript.** When you change a shape here, the worker's output must match.
     header, so sending `Content-Type` does NOT break the signature (proven by the Phase-2 101MB
     upload). Client mints the analysis id (`createId()`) and uses it as BOTH the row id and the
     R2 object name so they stay aligned.
+  - **Library import (`media-library.ts` `pickSwingVideo`) must opt into iCloud download.** An
+    imported clip can be offloaded to iCloud (not on the device); the picker's default
+    `videoExportPreset: Passthrough` (which we keep on purpose — pristine, un-re-encoded source
+    for the worker) reads the asset resource directly and, by default, won't fetch over the
+    network → it throws `PHPhotosErrorDomain error 3164`. Fix = pass `shouldDownloadFromNetwork:
+    true` to `launchImageLibraryAsync` (iOS-only; the flag only matters for `Passthrough` — other
+    presets download automatically). Available since expo-image-picker 55.0.0 (expo/expo
+    PR #40697); we're on 56.0.18, so it's purely a JS option (hot-reloads, no native rebuild).
   - **Overlay sync (the no-drift design):** the report's `SwingStage` sizes the video box to the
     clip's exact aspect ratio (`series.videoWidth/videoHeight`), so expo-video `contentFit=
     "contain"` has zero letterbox and `computeContainFit` returns a pure scale (offsets ≈ 0) —
@@ -391,17 +463,19 @@ free TypeScript.** When you change a shape here, the worker's output must match.
     approximate metrics stay qualitative — so the 20.01° never reaches the user as a figure.)
 
 ## 7b. Phase 7 gotchas (built)
-- **The validation gate changes a live-proven path — on purpose.** Gating
-  `reverse_spine_angle` + `over_the_top` to `soft_only` means a fault can FIRE with high
-  confidence yet not be selectable as the primary claim. On the sample clip
-  `reverse_spine_angle` fired (conf 0.807, status ok) but `primaryFaultId` is now `None` →
-  the report leads with "Looking solid / no clear priority fault" + the soft metric readout,
-  which is the honest output (we don't highlight a crude 2D proxy we haven't validated).
-  **Consequence for `scripts/recheck_checkpoint.sh`:** the identical-sample path used to write
-  a `drill_recheck` row off `reverse_spine_angle`→`tilt_away_drill`→`reverse_spine_deg`; with
-  the gate it now writes **no row** on that clip (no claim-eligible fault → no recheck). The
-  recheck MECHANISM is intact — it just needs a swing that fires a *reliable* fault
-  (chicken_wing / head / early_extension). Not a regression; the expected new behaviour.
+- **The validation gate keeps `soft_only` faults out of the PRIMARY claim — but they now drive
+  TENTATIVE coaching (updated 2026-06-27, USER-approved).** Gating `reverse_spine_angle` +
+  `over_the_top` to `soft_only` still means such a fault can FIRE with high confidence yet never
+  be `primaryFaultId`. **What changed:** a fired `soft_only` fault (when no claim-eligible primary
+  exists) is now surfaced as `observation_fault_id` and the coaching layer coaches on it *hedged*
+  (`tentative:true`, soft overlay, "Tentative observation" kicker) instead of falling to the canned
+  "Looking solid". This is the structural compromise that keeps the governing law (no crude proxy
+  as a hard verdict) while still giving the user something to work on — see §7 "Soft_only faults now
+  get TENTATIVE coaching". `primary_fault_id` semantics are unchanged; `observation_fault_id` is a
+  separate deterministic channel. **Consequence for `scripts/recheck_checkpoint.sh`:** the recheck
+  reads `coaching.chosenFaultId ?? primary_fault_id`, so a tentative-coached swing now CAN seed a
+  recheck off the observation fault's metric (previously it wrote no row when only a soft fault
+  fired). Mechanism intact; the comparison is honest as long as the tracked metric is `ok`.
 - **`claimEligible` is an additive, deterministic field on every `FaultEvaluation`.** It's a
   constant from the library (`entry.validation.claimEligibility == 'drives_claim'`), so the
   determinism payload stays byte-identical run-to-run (`determinism_check.sh` GREEN with it in

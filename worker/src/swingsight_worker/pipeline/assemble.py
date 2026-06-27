@@ -107,7 +107,7 @@ def run_measurement(
         return PipelineRun(result=result, clip=clip, pose=refined, events=events)
 
     metric_list, engine_conf = metrics.compute_metrics(refined, clip, events, view, handedness)
-    fault_list, primary_id = faults.evaluate_faults(
+    fault_list, primary_id, observation_id = faults.evaluate_faults(
         metric_list, engine_conf, refined, events, view, handedness
     )
     swing_score = score.compute_score(metric_list, engine_conf, events)
@@ -128,6 +128,7 @@ def run_measurement(
         metrics=metric_list,
         faults=fault_list,
         primary_fault_id=primary_id,
+        observation_fault_id=observation_id,
         score=swing_score,
         quality=quality_report,
         fault_library_version=FAULT_LIBRARY_VERSION,

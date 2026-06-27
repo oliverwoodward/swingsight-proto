@@ -24,9 +24,11 @@ from ..domain.fault_library import FAULT_LIBRARY, find_fault
 from ..domain.gating import (
     LOW_CONFIDENCE,
     evaluate_gate,
+    pick_observation_fault,
     pick_primary_fault,
     severity_band,
 )
+from .domain_const import calibrate_visibility
 from .types import PoseSeries, SwingEvents
 
 logger = logging.getLogger("swingsight.worker.faults")
@@ -58,7 +60,7 @@ def evaluate_faults(
     events: SwingEvents,
     view: str,
     handedness: str,
-) -> tuple[list[dict], str | None]:
+) -> tuple[list[dict], str | None, str | None]:
     by_key = {m["key"]: m for m in metrics}
     evaluations: list[dict] = []
 
@@ -78,7 +80,12 @@ def evaluate_faults(
         ef = events.events[end]["frameIndex"]
         lo, hi = min(sf, ef), max(sf, ef)
 
-        driving_vis = _driving_joint_visibility(pose, entry.highlight.joints, handedness, lo, hi)
+        # Calibrate raw joint visibility (raw ≈0.5 = "clearly seen") before it caps the
+        # fault confidence / decides the keypoint gate, mirroring the metric layer — else a
+        # well-shot fault is pinned at ≈0.5 on the eligibility knife-edge.
+        driving_vis = calibrate_visibility(
+            _driving_joint_visibility(pose, entry.highlight.joints, handedness, lo, hi)
+        )
         metric_conf = engine_conf.get(entry.gate.metric_key, metric["confidence"])
         confidence = max(0.0, min(1.0, min(metric_conf, driving_vis)))
 
@@ -112,10 +119,20 @@ def evaluate_faults(
 
     primary = pick_primary_fault(evaluations, severity_weight_of)
     primary_id = primary["faultId"] if primary else None
+
+    # When no claim-eligible fault clears the bar, surface the top fired soft_only fault
+    # (if any) as a TENTATIVE observation — a separate channel the coaching layer may
+    # hedge on, never a verdict. primary_fault_id still means "claim-eligible only".
+    observation_id = None
+    if primary_id is None:
+        observation = pick_observation_fault(evaluations, severity_weight_of)
+        observation_id = observation["faultId"] if observation else None
+
     logger.info(
-        "faults: %d evaluated, %d fired, primary=%s",
+        "faults: %d evaluated, %d fired, primary=%s, observation=%s",
         len(evaluations),
         sum(1 for e in evaluations if e["fired"]),
         primary_id,
+        observation_id,
     )
-    return evaluations, primary_id
+    return evaluations, primary_id, observation_id

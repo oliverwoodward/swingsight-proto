@@ -27,6 +27,7 @@ def measurement_payload(result: MeasurementResult) -> dict:
         "metrics": result.metrics,
         "faults": result.faults,
         "primaryFaultId": result.primary_fault_id,
+        "observationFaultId": result.observation_fault_id,
         "score": result.score,
         "quality": result.quality,
         "keypointFrames": result.keypoint_frames,

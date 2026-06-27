@@ -78,6 +78,9 @@ class MeasurementResult:
     metrics: list[dict] = field(default_factory=list)  # Metric[]
     faults: list[dict] = field(default_factory=list)  # FaultEvaluation[]
     primary_fault_id: Optional[str] = None
+    # Top fired soft_only fault when there is no claim-eligible primary — a tentative
+    # observation the coaching layer may hedge on, never a verdict.
+    observation_fault_id: Optional[str] = None
     score: Optional[dict] = None  # SwingScore
     quality: dict = field(default_factory=dict)  # QualityReport
     fault_library_version: str = ""

@@ -45,9 +45,10 @@ logger = logging.getLogger("swingsight.worker.coaching")
 MIN_LLM_CONFIDENCE = 0.4
 
 # Cap the model's output so a runaway generation can't bloat cost/latency.
-_MAX_TOKENS = 400
+_MAX_TOKENS = 600
 _MAX_HEADLINE = 140
 _MAX_WHY = 600
+_MAX_CHAIN = 600
 _MAX_BALL_FLIGHT = 240
 
 
@@ -66,6 +67,13 @@ class LlmCoaching(BaseModel):
     headline: str = Field(description="One short sentence: the one thing to work on.")
     why: str = Field(
         description="1-3 sentences, root cause to effect, plain and encouraging."
+    )
+    chain: Optional[str] = Field(
+        default=None,
+        description="2-4 short sentences: how the ONE selected fault links to the OTHER "
+        "things THIS swing's measurements show, across the swing phases. Language only, "
+        "grounded ONLY in the provided measurements — invent no numbers and name no second "
+        "fault as a diagnosis.",
     )
     drill_id: str = Field(
         description="One drill id from the chosen fault's eligible drills."
@@ -111,6 +119,17 @@ def _build_system_prompt() -> str:
         "golfer's handedness — mirror ALL left/right and lead/trail language to match it.\n"
         "- Keep the \"why\" to 1-3 short sentences: name the cause, then the effect, in "
         "language a weekend golfer understands.\n"
+        "- The \"chain\" explains how the ONE fault you selected knocks on through the rest "
+        "of the swing — link it to the OTHER measurements provided (tempo, follow-through, "
+        "balance, turn, etc.), 2-4 short sentences. Ground every link ONLY in the provided "
+        "measurements; do NOT invent a number and do NOT introduce a second fault as a "
+        "diagnosis. If the measurements don't support a real chain, give one sentence on the "
+        "fault's main downstream effect.\n"
+        "- Some open gates are marked \"tentative\": true — an APPROXIMATE 2D proxy the vision "
+        "system is not confident enough to assert as a fault. If you select a tentative gate, "
+        "hedge strongly (\"tends to look like\", \"it may be\", \"worth keeping an eye on\"), "
+        "frame it as an observation rather than a diagnosis, and still offer an encouraging "
+        "drill. Never present a tentative gate as a confirmed fault.\n"
         "- The optional ball-flight note is a TENDENCY, not a certainty (\"often\", \"tends to\")."
     )
 
@@ -136,6 +155,8 @@ def _build_system_prompt() -> str:
         "- chosen_fault_id: the id of the single fault you selected (one of the open gates).\n"
         "- headline: one short sentence, the one thing to work on.\n"
         "- why: 1-3 sentences, root cause -> effect, encouraging.\n"
+        "- chain: 2-4 sentences on how that one fault cascades through the rest of the swing, "
+        "grounded only in the provided measurements.\n"
         "- ball_flight_note: optional shot tendency phrased as a tendency, or null.\n"
         "- drill_id: one drill id from the chosen fault's eligible drills.\n"
         "- confidence: 0.0-1.0, your confidence this is the right priority fault and explanation."
@@ -203,7 +224,9 @@ def _clamp(s: Optional[str], n: int) -> Optional[str]:
 # ---------------------------------------------------------------------------
 
 
-def _template_for_fault(result: MeasurementResult, fault_id: str) -> dict:
+def _template_for_fault(
+    result: MeasurementResult, fault_id: str, tentative: bool = False
+) -> dict:
     entry = find_fault(fault_id)
     if entry is None:
         return _template_no_fault()
@@ -214,8 +237,13 @@ def _template_for_fault(result: MeasurementResult, fault_id: str) -> dict:
         "chosenFaultId": entry.id,
         "headline": entry.headline_template,
         "why": why,
+        # The library's explanation_hook is itself a cause->effect sentence, so the
+        # always-available floor still carries an honest chain (no fabricated data).
+        "chain": entry.explanation_hook,
         "drillId": entry.drill_ids[0] if entry.drill_ids else None,
     }
+    if tentative:
+        coaching["tentative"] = True
     if entry.ball_flight_hook:
         coaching["ballFlightNote"] = entry.ball_flight_hook
     return coaching
@@ -270,7 +298,9 @@ def _metrics_payload(result: MeasurementResult) -> list[dict]:
     ]
 
 
-def _open_gates_payload(result: MeasurementResult, open_ids: list[str]) -> list[dict]:
+def _open_gates_payload(
+    result: MeasurementResult, open_ids: list[str], tentative: bool = False
+) -> list[dict]:
     out = []
     for fid in open_ids:
         entry = find_fault(fid)
@@ -287,6 +317,7 @@ def _open_gates_payload(result: MeasurementResult, open_ids: list[str]) -> list[
                 "measuredValue": metric["value"] if metric else None,
                 "unit": metric["unit"] if metric else None,
                 "eligibleDrillIds": list(entry.drill_ids),
+                "tentative": tentative,
             }
         )
     return out
@@ -298,9 +329,17 @@ def _build_user_content(
     view: str,
     handedness: str,
     open_ids: list[str],
+    tentative: bool = False,
 ) -> list[dict]:
     import json
 
+    tentative_note = (
+        "\n\nNOTE: the single open gate below is a TENTATIVE observation from an APPROXIMATE "
+        "2D proxy — the vision system is not confident enough to assert it as a fault. Select "
+        "it, but hedge strongly and frame it as something to keep an eye on, not a diagnosis."
+        if tentative
+        else ""
+    )
     header = (
         f"View: {view}. {_handedness_line(handedness)}\n\n"
         "These are the AUTHORITATIVE measurements computed by the vision system — do NOT "
@@ -308,7 +347,8 @@ def _build_user_content(
         f"{json.dumps(_metrics_payload(result), separators=(',', ':'))}\n\n"
         "OPEN GATES — you may select exactly one of these chosen_fault_id values, and your "
         "drill_id must be one of that fault's eligibleDrillIds:\n"
-        f"{json.dumps(_open_gates_payload(result, open_ids), separators=(',', ':'))}\n\n"
+        f"{json.dumps(_open_gates_payload(result, open_ids, tentative), separators=(',', ':'))}"
+        f"{tentative_note}\n\n"
         f"The {len(keyframes)} images below are the key frames of THIS swing with the measured "
         "skeleton drawn on, one per swing event (labelled). Use them only to see the geometry "
         "the measurements already describe."
@@ -336,6 +376,7 @@ def _call_anthropic(
     view: str,
     handedness: str,
     open_ids: list[str],
+    tentative: bool = False,
 ) -> Optional[LlmCoaching]:
     """Constrained structured output via Claude Haiku 4.5. Returns the parsed object, or
     None on any error (the caller then falls back to the template)."""
@@ -358,7 +399,9 @@ def _call_anthropic(
         messages=[
             {
                 "role": "user",
-                "content": _build_user_content(result, keyframes, view, handedness, open_ids),
+                "content": _build_user_content(
+                    result, keyframes, view, handedness, open_ids, tentative
+                ),
             }
         ],
         output_format=LlmCoaching,
@@ -384,44 +427,54 @@ def generate_coaching(
 
     open_ids = _open_gate_ids(result)
 
-    # No gate cleared the bar: there is nothing for the AI to select. Don't fabricate.
-    if not open_ids:
-        logger.info("coaching: no open gates -> template (no fault)")
+    # Two coaching tiers, both still bound to gates the CV opened:
+    #   - a claim-eligible gate fired -> a confident verdict (the original path).
+    #   - else a soft_only fault fired -> a TENTATIVE observation, hedged (never a verdict).
+    #   - else nothing fired -> don't fabricate.
+    if open_ids:
+        tentative = False
+        selectable_ids = open_ids
+        primary_id = result.primary_fault_id or open_ids[0]
+    elif result.observation_fault_id:
+        tentative = True
+        selectable_ids = [result.observation_fault_id]
+        primary_id = result.observation_fault_id
+    else:
+        logger.info("coaching: no open gates and no observation -> template (no fault)")
         return _template_no_fault()
-
-    # The deterministic fallback choice is always the CV's primary fault.
-    primary_id = result.primary_fault_id or open_ids[0]
 
     provider = (settings.coaching_provider or "").lower()
     if provider != "anthropic" or not settings.anthropic_api_key:
         logger.info("coaching: provider=%s key=%s -> template", provider, bool(settings.anthropic_api_key))
-        return _template_for_fault(result, primary_id)
+        return _template_for_fault(result, primary_id, tentative=tentative)
 
     try:
-        parsed = _call_anthropic(settings, result, keyframes, view, handedness, open_ids)
+        parsed = _call_anthropic(
+            settings, result, keyframes, view, handedness, selectable_ids, tentative
+        )
     except Exception:  # noqa: BLE001 — the LLM is best-effort; the template always covers it
         logger.exception("coaching: LLM call failed -> template")
-        return _template_for_fault(result, primary_id)
+        return _template_for_fault(result, primary_id, tentative=tentative)
 
     if parsed is None:
         logger.warning("coaching: LLM returned no parsed output -> template")
-        return _template_for_fault(result, primary_id)
+        return _template_for_fault(result, primary_id, tentative=tentative)
 
     # Guardrail: the chosen fault MUST be one the CV opened. (This is the load-bearing
     # check — a fault outside the open gates is the one thing we never let through.)
-    if parsed.chosen_fault_id not in open_ids:
+    if parsed.chosen_fault_id not in selectable_ids:
         logger.warning(
-            "coaching: LLM chose '%s' not in open gates %s -> template",
-            parsed.chosen_fault_id, open_ids,
+            "coaching: LLM chose '%s' not in selectable gates %s -> template",
+            parsed.chosen_fault_id, selectable_ids,
         )
-        return _template_for_fault(result, primary_id)
+        return _template_for_fault(result, primary_id, tentative=tentative)
 
     # Low self-reported confidence -> keep the same (CV) fault but use template language.
     if parsed.confidence < MIN_LLM_CONFIDENCE:
         logger.info(
             "coaching: LLM confidence %.2f < %.2f -> template", parsed.confidence, MIN_LLM_CONFIDENCE
         )
-        return _template_for_fault(result, parsed.chosen_fault_id)
+        return _template_for_fault(result, parsed.chosen_fault_id, tentative=tentative)
 
     entry = find_fault(parsed.chosen_fault_id)
     assert entry is not None  # guaranteed: chosen_fault_id ∈ open_ids ⊆ library
@@ -438,15 +491,19 @@ def generate_coaching(
         "headline": _clamp(parsed.headline, _MAX_HEADLINE) or entry.headline_template,
         "why": _clamp(parsed.why, _MAX_WHY)
         or entry.why_template.format(value=_format_value(_metric_by_key(result, entry.gate.metric_key))),
+        # Chain falls back to the library's own cause->effect hook, never to nothing.
+        "chain": _clamp(parsed.chain, _MAX_CHAIN) or entry.explanation_hook,
         "drillId": drill_id,
         "llmConfidence": round(float(parsed.confidence), 3),
     }
+    if tentative:
+        coaching["tentative"] = True
     note = _clamp(parsed.ball_flight_note, _MAX_BALL_FLIGHT)
     if note:
         coaching["ballFlightNote"] = note
 
     logger.info(
-        "coaching: source=llm fault=%s drill=%s conf=%.2f",
-        coaching["chosenFaultId"], coaching["drillId"], parsed.confidence,
+        "coaching: source=llm fault=%s drill=%s conf=%.2f tentative=%s",
+        coaching["chosenFaultId"], coaching["drillId"], parsed.confidence, tentative,
     )
     return coaching

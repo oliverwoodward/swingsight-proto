@@ -157,6 +157,7 @@ def write_complete(
             "keypoints_meta": result.keypoints_meta,
             "faults": result.faults,
             "primary_fault_id": result.primary_fault_id,
+            "observation_fault_id": result.observation_fault_id,
             "score": result.score,
             "quality": result.quality,
             "fault_library_version": result.fault_library_version,

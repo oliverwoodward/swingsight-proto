@@ -277,8 +277,20 @@ export interface CoachingResult {
   chosenFaultId: string | null;
   headline: string;
   why: string;
+  /**
+   * How the one selected fault knocks on through the rest of the swing — grounded only in
+   * the measured metrics (language only; no fabricated numbers). Absent on the no-fault
+   * template.
+   */
+  chain?: string;
   ballFlightNote?: string;
   drillId: string | null;
+  /**
+   * True when the selected fault is a `soft_only` proxy surfaced as a TENTATIVE
+   * observation (no claim-eligible primary fired). The report frames it as something to
+   * keep an eye on, not a verdict, and the overlay stays soft. (spec §13.1)
+   */
+  tentative?: boolean;
   /** Advisory only; never gates the highlight or the score. */
   llmConfidence?: number;
 }
@@ -345,6 +357,12 @@ export interface SwingAnalysis {
   metrics: Metric[];
   faults: FaultEvaluation[];
   primaryFaultId: string | null;
+  /**
+   * Top fired `soft_only` fault when no claim-eligible primary cleared the bar — a
+   * tentative observation the coaching layer may hedge on, never a verdict. Distinct from
+   * `primaryFaultId` so the hard-vs-soft distinction stays explicit. (spec §13.1)
+   */
+  observationFaultId: string | null;
   score: SwingScore | null;
   coaching: CoachingResult | null;
   quality: QualityReport;

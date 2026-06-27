@@ -115,6 +115,29 @@ export function pickPrimaryFault(
 }
 
 /**
+ * Among the evaluated faults, pick the top TENTATIVE observation: the same
+ * magnitude × severityWeight ranking as {@link pickPrimaryFault}, but the INVERSE claim
+ * filter — a fired, adequately-confident, plausible fault that is NOT claim-eligible (a
+ * `soft_only` proxy). This is what the coaching layer may hedge on when no claim-eligible
+ * primary cleared the bar; it is never the primary claim. Returns null when nothing
+ * qualifies. Mirror of pick_observation_fault.
+ */
+export function pickObservationFault(
+  evaluations: FaultEvaluation[],
+  severityWeightOf: (faultId: string) => number,
+): FaultEvaluation | null {
+  const eligible = evaluations.filter(
+    (e) => e.fired && e.confidence >= LOW_CONFIDENCE && e.status === 'ok' && !e.claimEligible,
+  );
+  if (eligible.length === 0) return null;
+  return eligible.reduce((best, e) => {
+    const score = e.magnitude * severityWeightOf(e.faultId);
+    const bestScore = best.magnitude * severityWeightOf(best.faultId);
+    return score > bestScore ? e : best;
+  });
+}
+
+/**
  * Compose a metric's confidence from worker engine confidence × the metric's
  * reliability tier, used by both gating and the score's confidence gate.
  */
