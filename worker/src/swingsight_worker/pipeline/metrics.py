@@ -116,7 +116,12 @@ def _build(
     status = assess_metric_status(value, meta)
     if status == "ok" and engine_conf < LOW_CONFIDENCE:
         status = "low_confidence"
-    in_range = is_in_friendly_range(value, meta) if status == "ok" else False
+    # bool(...) coerces a possible numpy bool to a native Python bool: when `value` is a
+    # numpy float (e.g. follow_through_completion comes out of np.max/np.min), the chained
+    # comparison in is_in_friendly_range returns a numpy.bool_, which json.dumps cannot
+    # serialise ("Object of type bool is not JSON serializable") — it would crash the
+    # writeback. (Only surfaces when the metric is `ok` with a non-clamped value.)
+    in_range = bool(is_in_friendly_range(value, meta)) if status == "ok" else False
     metric = {
         "key": key,
         "label": meta.label,
