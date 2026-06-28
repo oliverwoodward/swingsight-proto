@@ -167,7 +167,7 @@ export default function ReportScreen() {
               ) : null}
               {coaching.whatsWorking ? (
                 <View style={styles.chainBlock}>
-                  <ThemedText style={styles.chainKicker}>What's working</ThemedText>
+                  <ThemedText style={styles.chainKicker}>What’s working</ThemedText>
                   <ThemedText style={styles.why}>{coaching.whatsWorking}</ThemedText>
                 </View>
               ) : null}
