@@ -338,6 +338,25 @@ free TypeScript.** When you change a shape here, the worker's output must match.
     every numeric field, and `score.withheld` is already `bool()`-wrapped, so `inRange` was the
     one gap. Determinism byte-identical (same sha256). Lesson: any bool entering the payload
     from a numpy comparison must be `bool()`-wrapped.
+  - **OBSERVATIONS tier — image-aware hedged read when NO fault fires (2026-06-28).** Many real
+    swings trip no gate (e.g. a DTL clip whose `over_the_top_deg` is NEGATIVE = inside/shallow, the
+    OPPOSITE of over-the-top, for which there is no fault; or `early_extension` at 5.98 vs a 6.0
+    gate — a near-miss), so the report kept showing the canned "Looking solid". Now the no-fault
+    branch of `generate_coaching` calls `_call_anthropic_observations` (new `LlmObservations` schema
+    + `OBSERVATIONS_SYSTEM_PROMPT`): the LLM looks at the swing-phase keyframes AND the out-of-range
+    measurements and writes a short HEDGED read — headline, summary, 1-3 "what we noticed" watch-outs,
+    "what's working" — grounded in real data and described in each metric's TRUE direction (a metric
+    guide in the prompt maps sign→meaning so a negative path reads "from the inside", never "over the
+    top"). Honesty held structurally: it asserts NO catalogued fault, the schema has no number/joint/
+    frame/score field, anything seen only in the frames must be hedged as a visual impression, and it
+    degrades to the deterministic "Looking solid" floor with no key / on any failure. `source:
+    "observations"` on the CoachingResult; the app renders "What we noticed" + "What's working". Still
+    structurally isolated (post `write_complete`), so determinism is untouched. **Live-proven**
+    (revision `swingsight-worker-00009-2ct`): the DTL near-miss/inside-path swing that gave "Looking
+    solid" now returns a 3-note observations read that correctly calls the path "dropping to the
+    inside" and cites "from the frames it looks like…". This is a deliberate widening of the governing
+    law (the AI now speaks about out-of-range METRICS + frames, not only CV-fired faults) — USER-approved;
+    measured claims (faults, score, overlay) stay CV-only, observations are clearly a softer, separate voice.
   - **Coaching write is retried + the app spinner is bounded (2026-06-27).** `generate_coaching`
     never raises (template floor), so a null `coaching` column only ever came from a transient
     `write_coaching` DB failure that `process.py` swallowed silently — leaving the report stuck
