@@ -215,6 +215,10 @@ def _build_observations_system_prompt() -> str:
         "'over the top'.\n"
         "- Hedge everything ('tends to', 'leaning toward', 'worth keeping an eye on'). These are "
         "observations, not a diagnosis.\n"
+        "- If the message lists NEAR-MISSES (a fault approaching but not over its threshold), you "
+        "MAY flag ONE as 'right on the edge of …' or 'starting to …' — a watch-out that has NOT "
+        "crossed the line. Never say the golfer HAS that fault, and never praise a near-miss "
+        "metric as 'right where it should be'.\n"
         "- No raw numbers in the prose (no degrees/cm/percent) and never a joint, frame, or score.\n"
         "- 'Lead'/'trail' are handedness-relative; mirror them to the stated handedness.\n"
         "- Keep it short and encouraging, and ALWAYS include what is working."
@@ -496,6 +500,60 @@ def _call_anthropic(
 # ---------------------------------------------------------------------------
 
 
+# A not-yet-fired fault whose value is within this fraction of its gate is "approaching"
+# — surfaced to observations mode so the AI can flag it as a watch-out (hedged), instead of
+# the metric reading as plainly "fine" just because it's a hair under the line.
+NEAR_MISS_FRACTION = 0.8
+
+
+def _gate_proximity(value: float, gate) -> float:
+    """How close a NOT-yet-fired value is to opening its gate, in [0,1] (1 = at the
+    threshold, approaching from the correct side). 0 when it isn't approaching at all (wrong
+    side, or far away). Only the 'approach toward firing' direction counts — a value on the
+    opposite side of an 'exceeds' gate (e.g. a negative over_the_top) is NOT a near-miss."""
+    op = gate.operator
+    t = gate.threshold
+    if op == "exceeds":
+        thr = t.get("min", 0) or 0
+        if thr <= 0 or value <= 0:
+            return 0.0
+        return min(1.0, value / thr)
+    if op == "magnitude_at_least":
+        thr = t.get("value", 0) or 0
+        if thr <= 0:
+            return 0.0
+        return min(1.0, abs(value) / thr)
+    # 'below' / 'outside' have no single clear approach direction for the launch faults; skip.
+    return 0.0
+
+
+def _near_miss_faults(result: MeasurementResult) -> list[dict]:
+    """In-view faults that did NOT fire but sit within NEAR_MISS_FRACTION of their gate — the
+    'right on the edge of X' watch-outs observations mode would otherwise miss (e.g. early
+    extension at 5.98 cm against a 6.0 cm gate)."""
+    out: list[dict] = []
+    for e in result.faults:
+        if e["fired"] or e["status"] != "ok":
+            continue
+        entry = find_fault(e["faultId"])
+        if entry is None:
+            continue
+        if _gate_proximity(float(e["value"]), entry.gate) < NEAR_MISS_FRACTION:
+            continue
+        metric = _metric_by_key(result, entry.gate.metric_key)
+        out.append(
+            {
+                "faultId": e["faultId"],
+                "name": entry.name,
+                "drivingMetric": entry.gate.metric_key,
+                # The plain-language tendency this is APPROACHING (not present).
+                "approachingTendency": entry.explanation_hook,
+                "reliability": metric["reliabilityTag"] if metric else "approximate",
+            }
+        )
+    return out
+
+
 def _observation_metrics_payload(result: MeasurementResult) -> list[dict]:
     """The measured (status 'ok') metrics handed to observations mode, with the context the
     model needs to read each deviation honestly (value vs ideal/friendlyRange + inRange)."""
@@ -520,12 +578,22 @@ def _build_observations_content(
 ) -> list[dict]:
     import json
 
+    near_misses = _near_miss_faults(result)
+    near_miss_block = (
+        "\n\nNEAR-MISSES — these faults did NOT fire but are APPROACHING their threshold; you "
+        "MAY gently flag ONE as 'right on the edge of …' / 'starting to …', clearly as a "
+        "watch-out that has NOT crossed the line, never as a present fault:\n"
+        f"{json.dumps(near_misses, separators=(',', ':'))}"
+        if near_misses
+        else ""
+    )
     header = (
         f"View: {view}. {_handedness_line(handedness)}\n\n"
         "No catalogued fault fired on this swing. These are the AUTHORITATIVE measurements "
         "(do NOT re-measure them); ground your observations in the ones OUTSIDE their ideal "
         "range, and read each deviation in the correct direction per the metric guide:\n"
-        f"{json.dumps(_observation_metrics_payload(result), separators=(',', ':'))}\n\n"
+        f"{json.dumps(_observation_metrics_payload(result), separators=(',', ':'))}"
+        f"{near_miss_block}\n\n"
         f"The {len(keyframes)} annotated frames below are this swing's key phases (labelled). "
         "Look at them to make your observations specific and to notice qualitative things the "
         "metrics don't capture — but anything you can ONLY see in the frames must be hedged as "
