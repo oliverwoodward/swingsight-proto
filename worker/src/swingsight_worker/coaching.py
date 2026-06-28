@@ -90,6 +90,27 @@ class LlmCoaching(BaseModel):
     )
 
 
+class LlmObservations(BaseModel):
+    """OBSERVATIONS mode — NO catalogued fault fired, so there is nothing to diagnose. The
+    model gives a hedged, encouraging read of what the measurements + the annotated frames
+    actually show. It still may NOT assert a catalogued fault as confirmed, and has no field
+    for a score / joint / frame, so it cannot emit one."""
+
+    headline: str = Field(description="One short, encouraging sentence summarising the swing.")
+    summary: str = Field(description="1-2 plain, encouraging sentences: the overall read.")
+    observations: list[str] = Field(
+        default_factory=list,
+        description="1-3 short, HEDGED watch-outs. Each must be grounded in a measurement that "
+        "is outside its ideal range OR in something clearly visible in the frames (say which). "
+        "Describe the ACTUAL direction of the deviation; never assert a catalogued fault.",
+    )
+    whats_working: Optional[str] = Field(
+        default=None,
+        description="One short sentence on what looks good (a metric that is in range).",
+    )
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+
+
 # ---------------------------------------------------------------------------
 # Frozen system prompt (built once from the fault library + drills so it can never
 # drift from the contract, and is byte-stable for prompt caching).
@@ -165,6 +186,67 @@ def _build_system_prompt() -> str:
 
 
 SYSTEM_PROMPT = _build_system_prompt()
+
+
+def _build_observations_system_prompt() -> str:
+    """OBSERVATIONS mode prompt — used when NO catalogued fault fired. The model gives an
+    honest, hedged read of what the swing's measurements + frames show, so the report is
+    useful even without a flagged fault, WITHOUT inventing a fault or a number."""
+    parts: list[str] = []
+    parts.append(
+        "You are SwingSight's golf-swing coaching assistant, in OBSERVATIONS mode.\n\n"
+        "The computer-vision system measured this swing but NONE of its catalogued faults "
+        "fired — so there is no diagnosed fault. Your job is to give the golfer an honest, "
+        "encouraging read of what their measurements (and the annotated frames) actually show, "
+        "so the report is still useful. You never measure anything yourself and you never "
+        "invent a named fault."
+    )
+    parts.append(
+        "Hard rules (enforced in code; output that breaks them is discarded):\n"
+        "- Do NOT assert any catalogued fault as confirmed (chicken wing, reverse spine, over "
+        "the top, early extension, head movement). Those come only from the measurement layer, "
+        "which flagged none here. You may note a gentle TENDENCY, heavily hedged.\n"
+        "- Ground every watch-out in a provided measurement that is OUTSIDE its ideal range, OR "
+        "in something clearly visible in the frames — and when it is only from the frames, say "
+        "so ('from the frames it looks like…').\n"
+        "- Describe the ACTUAL direction of each deviation using the metric guide below; never "
+        "force it into the nearest fault. E.g. a NEGATIVE downswing-path value means the club "
+        "works from the INSIDE / too shallow — the OPPOSITE of over the top; never call that "
+        "'over the top'.\n"
+        "- Hedge everything ('tends to', 'leaning toward', 'worth keeping an eye on'). These are "
+        "observations, not a diagnosis.\n"
+        "- No raw numbers in the prose (no degrees/cm/percent) and never a joint, frame, or score.\n"
+        "- 'Lead'/'trail' are handedness-relative; mirror them to the stated handedness.\n"
+        "- Keep it short and encouraging, and ALWAYS include what is working."
+    )
+    parts.append(
+        "Metric guide (direction → meaning; ideal in brackets):\n"
+        "- Downswing path [0]: positive = swinging OVER the top / across to the outside; "
+        "negative = dropping to the INSIDE / too shallow.\n"
+        "- Shoulder turn [~90]: low = under-turning (short coil); high = over-turning.\n"
+        "- X-factor [~45]: low = little separation between shoulders and hips; high = a lot.\n"
+        "- Hip thrust / early extension [0, lower better]: higher = hips drifting toward the "
+        "ball / standing up out of posture.\n"
+        "- Tempo ratio [~3:1]: lower = quick/rushed transition; higher = a slower, longer "
+        "backswing relative to the downswing.\n"
+        "- Backswing time [shorter-is-snappier]: longer = a slower takeaway.\n"
+        "- Follow-through completion [high better]: low = a short, unfinished finish.\n"
+        "- Balance [high better]: low = swaying / losing the base through the swing.\n"
+        "- Head sway / lift [low better]: higher = the head moving off the ball."
+    )
+    parts.append(
+        "Output fields:\n"
+        "- headline: one short, encouraging sentence summarising the swing.\n"
+        "- summary: 1-2 sentences, the overall read.\n"
+        "- observations: 1-3 hedged watch-outs, each tied to a real out-of-range measurement or "
+        "a clear visual in the frames, described in the correct direction.\n"
+        "- whats_working: one short sentence on what looks good.\n"
+        "- confidence: 0.0-1.0."
+    )
+    return "\n\n".join(parts)
+
+
+OBSERVATIONS_SYSTEM_PROMPT = _build_observations_system_prompt()
 
 
 # ---------------------------------------------------------------------------
@@ -410,6 +492,126 @@ def _call_anthropic(
 
 
 # ---------------------------------------------------------------------------
+# Observations mode (no fault fired) — a hedged read of the measurements + frames
+# ---------------------------------------------------------------------------
+
+
+def _observation_metrics_payload(result: MeasurementResult) -> list[dict]:
+    """The measured (status 'ok') metrics handed to observations mode, with the context the
+    model needs to read each deviation honestly (value vs ideal/friendlyRange + inRange)."""
+    return [
+        {
+            "key": m["key"],
+            "label": m["label"],
+            "value": m["value"],
+            "unit": m["unit"],
+            "ideal": m["ideal"],
+            "friendlyRange": m["friendlyRange"],
+            "inRange": m["inRange"],
+            "reliability": m["reliabilityTag"],
+        }
+        for m in result.metrics
+        if m["status"] == "ok"
+    ]
+
+
+def _build_observations_content(
+    result: MeasurementResult, keyframes, view: str, handedness: str
+) -> list[dict]:
+    import json
+
+    header = (
+        f"View: {view}. {_handedness_line(handedness)}\n\n"
+        "No catalogued fault fired on this swing. These are the AUTHORITATIVE measurements "
+        "(do NOT re-measure them); ground your observations in the ones OUTSIDE their ideal "
+        "range, and read each deviation in the correct direction per the metric guide:\n"
+        f"{json.dumps(_observation_metrics_payload(result), separators=(',', ':'))}\n\n"
+        f"The {len(keyframes)} annotated frames below are this swing's key phases (labelled). "
+        "Look at them to make your observations specific and to notice qualitative things the "
+        "metrics don't capture — but anything you can ONLY see in the frames must be hedged as "
+        "a visual impression ('from the frames it looks like…'), never stated as a measured fault."
+    )
+    content: list[dict] = [{"type": "text", "text": header}]
+    for kf in keyframes:
+        content.append({"type": "text", "text": f"Event: {kf.event_name}"})
+        content.append(
+            {
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": "image/jpeg",
+                    "data": base64.standard_b64encode(kf.jpeg).decode("ascii"),
+                },
+            }
+        )
+    return content
+
+
+def _call_anthropic_observations(
+    settings: Settings, result: MeasurementResult, keyframes, view: str, handedness: str
+) -> Optional[LlmObservations]:
+    from anthropic import Anthropic
+
+    client = Anthropic(api_key=settings.anthropic_api_key)
+    resp = client.messages.parse(
+        model=settings.coaching_model,
+        max_tokens=_MAX_TOKENS,
+        temperature=0,
+        system=[
+            {
+                "type": "text",
+                "text": OBSERVATIONS_SYSTEM_PROMPT,
+                "cache_control": {"type": "ephemeral"},
+            }
+        ],
+        messages=[
+            {"role": "user", "content": _build_observations_content(result, keyframes, view, handedness)}
+        ],
+        output_format=LlmObservations,
+    )
+    return resp.parsed_output
+
+
+def _observations_result(parsed: LlmObservations) -> dict:
+    notes = [n for n in (_clamp(o, _MAX_WHY) for o in (parsed.observations or [])) if n]
+    coaching: dict = {
+        "source": "observations",
+        "chosenFaultId": None,
+        "headline": _clamp(parsed.headline, _MAX_HEADLINE) or "Here's what we saw",
+        "why": _clamp(parsed.summary, _MAX_WHY) or "",
+        "observations": notes[:3],
+        "drillId": None,
+        "llmConfidence": round(float(parsed.confidence), 3),
+    }
+    working = _clamp(parsed.whats_working, _MAX_WHY)
+    if working:
+        coaching["whatsWorking"] = working
+    return coaching
+
+
+def _generate_observations(
+    settings: Settings, result: MeasurementResult, keyframes, view: str, handedness: str
+) -> dict:
+    """No fault fired -> give a hedged OBSERVATIONS read via the LLM (it looks at the frames).
+    The template floor stays the honest "Looking solid" when there's no key or the call fails —
+    we never fabricate observations from a template."""
+    provider = (settings.coaching_provider or "").lower()
+    if provider != "anthropic" or not settings.anthropic_api_key:
+        logger.info("coaching: no fault + no key -> template (no fault)")
+        return _template_no_fault()
+    try:
+        parsed = _call_anthropic_observations(settings, result, keyframes, view, handedness)
+    except Exception:  # noqa: BLE001 — best-effort; the template always covers it
+        logger.exception("coaching: observations call failed -> template")
+        return _template_no_fault()
+    if parsed is None:
+        return _template_no_fault()
+    out = _observations_result(parsed)
+    logger.info("coaching: source=observations (%d notes)", len(out["observations"]))
+    return out
+
+
+# ---------------------------------------------------------------------------
 # Orchestration
 # ---------------------------------------------------------------------------
 
@@ -440,8 +642,11 @@ def generate_coaching(
         selectable_ids = [result.observation_fault_id]
         primary_id = result.observation_fault_id
     else:
-        logger.info("coaching: no open gates and no observation -> template (no fault)")
-        return _template_no_fault()
+        # No fault gate fired at all. Rather than the bare "Looking solid" template, give an
+        # honest, hedged OBSERVATIONS read of what the measurements + the frames actually show
+        # (the LLM looks at the keyframes here). Never asserts a catalogued fault; degrades to
+        # the "Looking solid" template if there's no key or the call fails.
+        return _generate_observations(settings, result, keyframes, view, handedness)
 
     provider = (settings.coaching_provider or "").lower()
     if provider != "anthropic" or not settings.anthropic_api_key:

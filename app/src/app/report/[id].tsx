@@ -154,6 +154,23 @@ export default function ReportScreen() {
                   <ThemedText style={styles.why}>{coaching.chain}</ThemedText>
                 </View>
               ) : null}
+              {coaching.observations && coaching.observations.length > 0 ? (
+                <View style={styles.chainBlock}>
+                  <ThemedText style={styles.chainKicker}>What we noticed</ThemedText>
+                  {coaching.observations.map((o, i) => (
+                    <View key={i} style={styles.obsRow}>
+                      <ThemedText style={styles.obsBullet}>•</ThemedText>
+                      <ThemedText style={[styles.why, styles.obsText]}>{o}</ThemedText>
+                    </View>
+                  ))}
+                </View>
+              ) : null}
+              {coaching.whatsWorking ? (
+                <View style={styles.chainBlock}>
+                  <ThemedText style={styles.chainKicker}>What's working</ThemedText>
+                  <ThemedText style={styles.why}>{coaching.whatsWorking}</ThemedText>
+                </View>
+              ) : null}
               {coaching.ballFlightNote ? (
                 <ThemedText style={styles.ballFlight}>{coaching.ballFlightNote}</ThemedText>
               ) : null}
@@ -385,6 +402,9 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     textTransform: 'uppercase',
   },
+  obsRow: { flexDirection: 'row', gap: 8 },
+  obsBullet: { color: Brand.accent, fontSize: 16, lineHeight: 24 },
+  obsText: { flex: 1 },
   ballFlight: { color: Brand.highlight, fontSize: 14, lineHeight: 21, fontStyle: 'italic', marginTop: 2 },
   pending: { flexDirection: 'row', alignItems: 'center', gap: 10 },
 

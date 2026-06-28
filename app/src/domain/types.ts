@@ -273,7 +273,12 @@ export interface Drill {
  * frame — those come from the measurement layer only.
  */
 export interface CoachingResult {
-  source: 'llm' | 'template';
+  /**
+   * 'llm' — a fault was selected + explained. 'observations' — no fault fired, so the AI
+   * gave a hedged read of what the measurements + frames show (no diagnosed fault).
+   * 'template' — the deterministic fallback (LLM unavailable / failed / no fault at all).
+   */
+  source: 'llm' | 'template' | 'observations';
   chosenFaultId: string | null;
   headline: string;
   why: string;
@@ -283,6 +288,13 @@ export interface CoachingResult {
    * template.
    */
   chain?: string;
+  /**
+   * Observations mode only: 1-3 hedged watch-outs grounded in out-of-range measurements or
+   * what the AI sees in the frames — never a confirmed fault.
+   */
+  observations?: string[];
+  /** Observations mode only: one short note on what looks good. */
+  whatsWorking?: string;
   ballFlightNote?: string;
   drillId: string | null;
   /**
