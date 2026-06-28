@@ -351,7 +351,11 @@ free TypeScript.** When you change a shape here, the worker's output must match.
     frame/score field, anything seen only in the frames must be hedged as a visual impression, and it
     degrades to the deterministic "Looking solid" floor with no key / on any failure. `source:
     "observations"` on the CoachingResult; the app renders "What we noticed" + "What's working". Still
-    structurally isolated (post `write_complete`), so determinism is untouched. **Live-proven**
+    structurally isolated (post `write_complete`), so determinism is untouched. A NEAR-MISS pass
+    (`_near_miss_faults`, 2026-06-28) also feeds observations any fault within 80% of its gate from
+    the CORRECT side (e.g. early extension 5.98 vs a 6.0 gate; a negative `over_the_top` reads 0 =
+    not a near-miss), so the AI flags it "right on the edge of…" rather than praising a hair-under
+    metric as "right where it should be". **Live-proven**
     (revision `swingsight-worker-00009-2ct`): the DTL near-miss/inside-path swing that gave "Looking
     solid" now returns a 3-note observations read that correctly calls the path "dropping to the
     inside" and cites "from the frames it looks like…". This is a deliberate widening of the governing
